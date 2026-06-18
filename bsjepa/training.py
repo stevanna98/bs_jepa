@@ -113,7 +113,8 @@ def pretrain(
                 diversity = rsn_diversity_loss(
                     predictions, row_group_ids, group_rsn_ids
                 )
-                loss = loss + diversity_weight * diversity
+                # loss = loss + diversity_weight * diversity
+                loss = loss
                 metrics["rsn_diversity"] = diversity.item()
             loss.backward()
             clip_grad = config.get("clip_grad")
