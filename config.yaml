@@ -23,7 +23,7 @@ data:
   num_workers: 0
 
 masking:
-  num_targets: 10
+  num_targets: 4
 
 model:
   embed_dim: 64

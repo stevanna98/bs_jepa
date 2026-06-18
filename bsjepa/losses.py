@@ -145,13 +145,12 @@ def jepa_loss(
     centered = context - context.mean(0)
     covariance = centered.T @ centered / max(context.shape[0] - 1, 1)
     covariance_penalty = _off_diagonal(covariance).pow(2).sum() / context.shape[1]
-    # total = (
-    #     similarity
-    #     + prediction_variance_weight * prediction_variance
-    #     + context_variance_weight * context_variance
-    #     + covariance_weight * covariance_penalty
-    # )
-    total = similarity
+    total = (
+        similarity
+        + prediction_variance_weight * prediction_variance
+        + context_variance_weight * context_variance
+        + covariance_weight * covariance_penalty
+    )
     metrics = {
         "similarity": similarity.item(),
         "prediction_variance": prediction_variance.item(),
