@@ -173,6 +173,11 @@ class BrainGraphDataset(Dataset[Data]):
     def __len__(self) -> int:
         return len(self._subjects)
 
+    @property
+    def subject_ids(self) -> list[Any]:
+        """Return subject identifiers in dataset-index order."""
+        return list(self._subjects)
+
     def __getitem__(self, index: int) -> Data:
         key = self._subjects[index]
         record = _load_file(key) if self._records is None else self._records[key]
@@ -228,6 +233,10 @@ class SyntheticBrainDataset(Dataset[Data]):
 
     def __len__(self) -> int:
         return self.num_subjects
+
+    @property
+    def subject_ids(self) -> list[str]:
+        return [f"synthetic_{index}" for index in range(self.num_subjects)]
 
     def __getitem__(self, index: int) -> Data:
         generator = torch.Generator().manual_seed(self.seed + index)

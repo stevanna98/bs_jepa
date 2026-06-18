@@ -10,6 +10,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
+from .evaluation import LabeledGraphDataset, evaluate_pmat
 from .losses import (
     jepa_loss,
     per_rsn_prediction_losses,
@@ -59,6 +60,8 @@ def pretrain(
     *,
     device: torch.device,
     output_dir: str | Path,
+    evaluation_dataset: LabeledGraphDataset | None = None,
+    evaluation_config: dict[str, Any] | None = None,
 ) -> list[dict[str, float]]:
     """Run BS-JEPA pretraining and write checkpoints and diagnostic plots."""
     epochs = int(config["epochs"])
@@ -74,6 +77,13 @@ def pretrain(
     save_plots = bool(config.get("save_plots", True))
     plot_frequency = int(config.get("plot_frequency", 1))
     collapse_metrics = bool(config.get("collapse_metrics", True))
+    evaluation_frequency = (
+        int(evaluation_config["frequency_epochs"])
+        if evaluation_config is not None and evaluation_dataset is not None
+        else 0
+    )
+    if evaluation_dataset is not None and evaluation_frequency <= 0:
+        raise ValueError("evaluation.frequency_epochs must be positive")
     history: list[dict[str, float]] = []
     global_step = 0
 
@@ -169,6 +179,17 @@ def pretrain(
             "learning_rate": learning_rate,
             "ema_momentum": momentum,
         }
+        if evaluation_frequency > 0 and (
+            epoch % evaluation_frequency == 0 or epoch == epochs
+        ):
+            epoch_metrics.update(
+                evaluate_pmat(
+                    model,
+                    evaluation_dataset,
+                    evaluation_config,
+                    device=device,
+                )
+            )
         history.append(epoch_metrics)
         summary = " ".join(f"{key}={value:.5g}" for key, value in epoch_metrics.items())
         print(summary, flush=True)
@@ -181,6 +202,7 @@ def pretrain(
                     "model": model.state_dict(),
                     "optimizer": optimizer.state_dict(),
                     "metrics": epoch_metrics,
+                    "history": history,
                 },
                 output_path / f"checkpoint_{epoch:04d}.pt",
             )

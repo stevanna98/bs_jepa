@@ -20,6 +20,7 @@ from bsjepa import (
     build_bsjepa,
     load_atlas,
     pretrain,
+    split_pmat_holdout,
 )
 from bsjepa.data import synthetic_atlas
 
@@ -87,15 +88,26 @@ def main() -> None:
             top_k=int(data_config["top_k"]),
             threshold=float(data_config["threshold"]),
         )
+    evaluation_config = config.get("evaluation", {})
+    evaluation_dataset = None
+    training_dataset = dataset
+    if bool(evaluation_config.get("enabled", False)):
+        training_dataset, evaluation_dataset = split_pmat_holdout(
+            dataset, evaluation_config
+        )
+        print(
+            f"PMAT split: pretraining_subjects={len(training_dataset)} "
+            f"heldout_subjects={len(evaluation_dataset)}"
+        )
     loader = DataLoader(
-        dataset,
+        training_dataset,
         batch_size=int(data_config["batch_size"]),
         shuffle=True,
         num_workers=int(data_config["num_workers"]),
         collate_fn=list,
         drop_last=False,
     )
-    sample = dataset[0]
+    sample = training_dataset[0]
     model_config = dict(config["model"])
     if data_config["source"] == "synthetic":
         model_config["feature_mode"] = "passthrough"
@@ -108,7 +120,7 @@ def main() -> None:
         atlas.num_rsns, int(config["masking"]["num_targets"])
     )
     print(
-        f"device={device} subjects={len(dataset)} regions={atlas.num_regions} "
+        f"device={device} subjects={len(training_dataset)} regions={atlas.num_regions} "
         f"trainable_parameters={sum(p.numel() for p in model.parameters() if p.requires_grad)}"
     )
     pretrain(
@@ -118,6 +130,8 @@ def main() -> None:
         config["training"],
         device=device,
         output_dir=config["output_dir"],
+        evaluation_dataset=evaluation_dataset,
+        evaluation_config=evaluation_config if evaluation_dataset is not None else None,
     )
 
 

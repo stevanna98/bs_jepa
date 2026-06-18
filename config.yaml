@@ -20,7 +20,7 @@ data:
   num_workers: 0
 
 masking:
-  num_targets: 2
+  num_targets: 10
 
 model:
   embed_dim: 64
@@ -58,3 +58,16 @@ training:
   save_plots: true
   plot_frequency: 1
   collapse_metrics: true
+
+evaluation:
+  enabled: true
+  pmat_csv: /Users/stefanovannoni/Desktop/IMPERIAL COLLEGE/Data/data/hcp_ya_dataset/HCP_YA_subjects_2026_04_02_12_52_45.csv
+  label_column: PMAT24_A_CR
+  subject_column: Subject
+  heldout_size: 64
+  frequency_epochs: 5
+  regressor_epochs: 100
+  regressor_lr: 0.001
+  batch_size: 32
+  validation_fraction: 0.25
+  random_seed: 42

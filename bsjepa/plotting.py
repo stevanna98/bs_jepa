@@ -93,3 +93,31 @@ def save_training_plots(history: list[dict[str, float]], plot_dir: str | Path) -
         plt.grid(alpha=0.3)
         plt.legend(fontsize="small")
         _save_figure(path / filename)
+
+    downstream_rows = [row for row in history if "pmat_val_mae" in row]
+    if downstream_rows:
+        evaluation_epochs = [row["epoch"] for row in downstream_rows]
+        figure, axes = plt.subplots(2, 1, figsize=(8, 7), sharex=True)
+        for key in ("pmat_val_mae", "pmat_val_rmse"):
+            axes[0].plot(
+                evaluation_epochs,
+                [row[key] for row in downstream_rows],
+                marker="o",
+                label=key.removeprefix("pmat_val_").upper(),
+            )
+        axes[0].set_ylabel("PMAT score error")
+        axes[0].grid(alpha=0.3)
+        axes[0].legend()
+        for key in ("pmat_val_r2", "pmat_val_pearson"):
+            axes[1].plot(
+                evaluation_epochs,
+                [row[key] for row in downstream_rows],
+                marker="o",
+                label=key.removeprefix("pmat_val_").replace("r2", "R²").title(),
+            )
+        axes[1].set_xlabel("Pretraining epoch")
+        axes[1].set_ylabel("Validation score")
+        axes[1].grid(alpha=0.3)
+        axes[1].legend()
+        figure.suptitle("Frozen Target Encoder PMAT Evaluation")
+        _save_figure(path / "pmat_downstream_metrics.png")
