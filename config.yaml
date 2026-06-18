@@ -61,6 +61,7 @@ training:
   save_plots: true
   plot_frequency: 1
   collapse_metrics: true
+  subject_specificity_metrics: true
   save_final_artifact: true
   artifact_name:
   publication_plot_dpi: 300

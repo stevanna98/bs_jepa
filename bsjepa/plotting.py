@@ -95,6 +95,20 @@ def _save_training_plots(
             "prediction_norm_mean",
             "prediction_norm_std",
         ],
+        "region_subject_specificity.png": [
+            "prediction_same_region_across_subject_cosine",
+            "prediction_across_region_within_subject_cosine",
+        ],
+        "subject_graph_embedding_variance.png": [
+            "context_graph_embedding_subject_std",
+            "target_graph_embedding_subject_std",
+            "prediction_graph_embedding_subject_std",
+        ],
+        "subject_graph_embedding_similarity.png": [
+            "context_graph_embedding_subject_pairwise_cosine",
+            "target_graph_embedding_subject_pairwise_cosine",
+            "prediction_graph_embedding_subject_pairwise_cosine",
+        ],
     }
     for filename, keys in collapse_groups.items():
         available = [key for key in keys if any(key in row for row in history)]

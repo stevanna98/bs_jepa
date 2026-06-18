@@ -131,7 +131,12 @@ class BSJEPA(nn.Module):
         return self
 
     def forward(
-        self, batch: Batch, masks: MaskOutput, *, return_groups: bool = False
+        self,
+        batch: Batch,
+        masks: MaskOutput,
+        *,
+        return_groups: bool = False,
+        return_metadata: bool = False,
     ) -> tuple[torch.Tensor, ...]:
         graphs = batch.to_data_list()
         with torch.no_grad():
@@ -150,6 +155,8 @@ class BSJEPA(nn.Module):
         target_embeddings: list[torch.Tensor] = []
         row_group_ids: list[torch.Tensor] = []
         group_rsn_ids: list[torch.Tensor] = []
+        prediction_subject_ids: list[torch.Tensor] = []
+        prediction_region_ids: list[torch.Tensor] = []
         group_index = 0
 
         for subject, graph in enumerate(graphs):
@@ -182,6 +189,14 @@ class BSJEPA(nn.Module):
                     )
                     group_rsn_ids.append(masks.target_rsn_ids[subject, target_index])
                     group_index += 1
+                if return_metadata:
+                    count = int(is_target.sum())
+                    prediction_subject_ids.append(
+                        torch.full(
+                            (count,), subject, device=batch.x.device, dtype=torch.long
+                        )
+                    )
+                    prediction_region_ids.append(subgraph.region_ids[is_target])
 
         if not predictor_graphs:
             raise RuntimeError("No target nodes were found; check the atlas RSN mapping")
@@ -194,6 +209,16 @@ class BSJEPA(nn.Module):
         )
         if return_groups:
             outputs += (torch.cat(row_group_ids), torch.stack(group_rsn_ids))
+        if return_metadata:
+            target_graph_embeddings = torch.stack(
+                [embeddings.mean(0) for embeddings in target_all]
+            )
+            outputs += (
+                torch.cat(prediction_subject_ids),
+                torch.cat(prediction_region_ids),
+                context_batch.batch,
+                target_graph_embeddings,
+            )
         return outputs
 
     @torch.no_grad()

@@ -17,6 +17,7 @@ from .losses import (
     per_rsn_prediction_losses,
     representation_diagnostics,
     rsn_diversity_loss,
+    subject_specificity_diagnostics,
 )
 from .masking import SubnetworkMaskCollator
 from .model import BSJEPA
@@ -80,6 +81,9 @@ def pretrain(
     save_plots = bool(config.get("save_plots", True))
     plot_frequency = int(config.get("plot_frequency", 1))
     collapse_metrics = bool(config.get("collapse_metrics", True))
+    subject_specificity_metrics = bool(
+        config.get("subject_specificity_metrics", True)
+    )
     evaluation_frequency = (
         int(evaluation_config["frequency_epochs"])
         if evaluation_config is not None and evaluation_dataset is not None
@@ -109,7 +113,12 @@ def pretrain(
             batch, masks = mask_collator(raw_graphs)
             batch, masks = batch.to(device), masks.to(device)
             optimizer.zero_grad(set_to_none=True)
-            outputs = model(batch, masks, return_groups=True)
+            outputs = model(
+                batch,
+                masks,
+                return_groups=True,
+                return_metadata=subject_specificity_metrics,
+            )
             predictions, targets, context = outputs[:3]
             loss, metrics = jepa_loss(
                 predictions,
@@ -123,6 +132,17 @@ def pretrain(
             if collapse_metrics:
                 metrics.update(representation_diagnostics(predictions, targets, context))
             row_group_ids, group_rsn_ids = outputs[3], outputs[4]
+            if subject_specificity_metrics:
+                metrics.update(
+                    subject_specificity_diagnostics(
+                        predictions,
+                        outputs[5],
+                        outputs[6],
+                        context,
+                        outputs[7],
+                        outputs[8],
+                    )
+                )
             rsn_losses = per_rsn_prediction_losses(
                 predictions, targets, row_group_ids, group_rsn_ids
             )

@@ -44,6 +44,67 @@ def representation_diagnostics(
     return metrics
 
 
+def _mean_pool_by_group(
+    embeddings: torch.Tensor, group_ids: torch.Tensor
+) -> torch.Tensor:
+    return torch.stack(
+        [embeddings[group_ids == group].mean(0) for group in group_ids.unique()]
+    )
+
+
+def _mean_group_pairwise_cosine(
+    embeddings: torch.Tensor,
+    outer_group_ids: torch.Tensor,
+    inner_group_ids: torch.Tensor,
+) -> float:
+    similarities: list[float] = []
+    for outer_group in outer_group_ids.unique():
+        selected = outer_group_ids == outer_group
+        inner_groups = inner_group_ids[selected]
+        if inner_groups.unique().numel() < 2:
+            continue
+        pooled = _mean_pool_by_group(embeddings[selected], inner_groups)
+        similarities.append(_mean_pairwise_cosine(pooled))
+    return sum(similarities) / len(similarities) if similarities else float("nan")
+
+
+@torch.no_grad()
+def subject_specificity_diagnostics(
+    predictions: torch.Tensor,
+    prediction_subject_ids: torch.Tensor,
+    prediction_region_ids: torch.Tensor,
+    context: torch.Tensor,
+    context_subject_ids: torch.Tensor,
+    target_graph_embeddings: torch.Tensor,
+) -> dict[str, float]:
+    """Measure whether embeddings vary by subject rather than only by region."""
+    metrics = {
+        "prediction_same_region_across_subject_cosine": _mean_group_pairwise_cosine(
+            predictions, prediction_region_ids, prediction_subject_ids
+        ),
+        "prediction_across_region_within_subject_cosine": _mean_group_pairwise_cosine(
+            predictions, prediction_subject_ids, prediction_region_ids
+        ),
+    }
+    graph_embeddings = {
+        "context": _mean_pool_by_group(context, context_subject_ids),
+        "target": target_graph_embeddings,
+        "prediction": _mean_pool_by_group(predictions, prediction_subject_ids),
+    }
+    for name, embeddings in graph_embeddings.items():
+        if embeddings.shape[0] < 2:
+            metrics[f"{name}_graph_embedding_subject_std"] = float("nan")
+            metrics[f"{name}_graph_embedding_subject_pairwise_cosine"] = float("nan")
+            continue
+        metrics[f"{name}_graph_embedding_subject_std"] = embeddings.std(
+            0, unbiased=False
+        ).mean().item()
+        metrics[f"{name}_graph_embedding_subject_pairwise_cosine"] = (
+            _mean_pairwise_cosine(embeddings)
+        )
+    return metrics
+
+
 @torch.no_grad()
 def per_rsn_prediction_losses(
     predictions: torch.Tensor,
