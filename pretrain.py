@@ -22,8 +22,9 @@ from bsjepa import (
     pretrain,
     split_pmat_holdout,
 )
-from bsjepa.data import synthetic_atlas
+from bsjepa.data import load_gradient_features, synthetic_atlas
 from bsjepa.linear_probe import split_gender_probe_holdout
+from bsjepa.model import resolve_positional_encoding_config
 
 
 def parse_args() -> argparse.Namespace:
@@ -43,15 +44,15 @@ def load_config(path: Path, overrides: list[str]) -> dict[str, Any]:
         key, separator, raw_value = override.partition("=")
         if not separator:
             raise ValueError(f"Invalid override: {override!r}")
-        if "." not in key:
-            if key not in config:
+        fields = key.split(".")
+        target = config
+        for field in fields[:-1]:
+            if field not in target or not isinstance(target[field], dict):
                 raise KeyError(f"Unknown config key: {key}")
-            config[key] = yaml.safe_load(raw_value)
-            continue
-        section, field = key.split(".", 1)
-        if section not in config or field not in config[section]:
+            target = target[field]
+        if fields[-1] not in target:
             raise KeyError(f"Unknown config key: {key}")
-        config[section][field] = yaml.safe_load(raw_value)
+        target[fields[-1]] = yaml.safe_load(raw_value)
     return config
 
 
@@ -102,6 +103,7 @@ def main() -> None:
             graph_strategy=data_config["graph_strategy"],
             top_k=int(data_config["top_k"]),
             threshold=float(data_config["threshold"]),
+            gradient_key=data_config.get("gradient_key"),
             **subnetwork_options,
         )
     evaluation_config = config.get("evaluation", {})
@@ -139,9 +141,38 @@ def main() -> None:
     model_config = dict(config["model"])
     if data_config["source"] == "synthetic":
         model_config["feature_mode"] = "passthrough"
+    positional_config = resolve_positional_encoding_config(
+        model_config.get("positional_encoding"),
+        model_config.get("region_positional_encoding"),
+    )
+    positional_type = positional_config["type"]
+    fixed_gradient_features = None
+    if positional_type == "fixed_gradient":
+        gradient_file = positional_config.get("gradient_file")
+        if not gradient_file:
+            raise ValueError(
+                "model.positional_encoding.gradient_file is required for fixed_gradient"
+            )
+        fixed_gradient_features = load_gradient_features(
+            gradient_file,
+            atlas.num_regions,
+            gradient_columns=positional_config.get("gradient_columns"),
+            region_column=positional_config.get("region_column"),
+        )
+        positional_config["gradient_dim"] = fixed_gradient_features.shape[1]
+    elif positional_type == "subject_gradient":
+        positional_features = getattr(sample, "positional_features", None)
+        if positional_features is None:
+            raise ValueError(
+                "subject_gradient requires data.gradient_key and precomputed gradients "
+                "in every subject record"
+            )
+        positional_config["gradient_dim"] = positional_features.shape[1]
+    model_config["positional_encoding"] = positional_config
     model = build_bsjepa(
         in_channels=sample.x.shape[1],
         num_regions=atlas.num_regions,
+        fixed_gradient_features=fixed_gradient_features,
         **model_config,
     )
     collator = SubnetworkMaskCollator(
@@ -150,6 +181,7 @@ def main() -> None:
     print(
         f"device={device} subjects={len(training_dataset)} regions={atlas.num_regions} "
         f"subnetworks={num_subnetworks} strategy={subnetwork_strategy} "
+        f"positional_encoding={positional_type} "
         f"trainable_parameters={sum(p.numel() for p in model.parameters() if p.requires_grad)}"
     )
     history = pretrain(

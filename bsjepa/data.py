@@ -53,6 +53,112 @@ def load_atlas(path: str | Path) -> Atlas:
     )
 
 
+def _order_gradient_rows(
+    gradients: torch.Tensor,
+    region_values: list[Any] | np.ndarray | torch.Tensor | None,
+    num_regions: int,
+) -> torch.Tensor:
+    if gradients.ndim != 2 or gradients.shape[0] != num_regions:
+        raise ValueError(
+            "Gradient features must have shape [num_regions, gradient_dim]"
+        )
+    if region_values is not None:
+        raw_ids = [int(value) for value in region_values]
+        if set(raw_ids) == set(range(num_regions)):
+            offset = 0
+        elif set(raw_ids) == set(range(1, num_regions + 1)):
+            offset = 1
+        else:
+            raise ValueError(
+                "Gradient region IDs must be unique zero-based or one-based integers"
+            )
+        order = torch.empty(num_regions, dtype=torch.long)
+        for row, region_id in enumerate(raw_ids):
+            order[region_id - offset] = row
+        gradients = gradients[order]
+    gradients = gradients.float()
+    if gradients.shape[1] < 1 or not torch.isfinite(gradients).all():
+        raise ValueError("Gradient features must be finite and have at least one column")
+    return gradients
+
+
+def load_gradient_features(
+    path: str | Path,
+    num_regions: int,
+    *,
+    gradient_columns: list[str] | None = None,
+    region_column: str | None = None,
+) -> torch.Tensor:
+    """Load fixed atlas gradients from CSV, PT, or NPZ in atlas-region order."""
+    gradient_path = Path(path)
+    region_values: list[Any] | np.ndarray | torch.Tensor | None = None
+    if gradient_path.suffix == ".csv":
+        with gradient_path.open(newline="") as handle:
+            rows = list(csv.DictReader(handle))
+        if not rows:
+            raise ValueError(f"Gradient file is empty: {gradient_path}")
+        columns = gradient_columns or [
+            column for column in rows[0] if column != region_column
+        ]
+        if not columns or any(column not in rows[0] for column in columns):
+            raise KeyError("Configured gradient columns are missing from the CSV")
+        if region_column:
+            if region_column not in rows[0]:
+                raise KeyError(f"Region column {region_column!r} is missing from the CSV")
+            region_values = [row[region_column] for row in rows]
+        gradients = torch.tensor(
+            [[float(row[column]) for column in columns] for row in rows],
+            dtype=torch.float32,
+        )
+    elif gradient_path.suffix == ".pt":
+        loaded = torch.load(gradient_path, map_location="cpu", weights_only=False)
+        if isinstance(loaded, torch.Tensor):
+            if region_column:
+                raise KeyError(
+                    "A tensor-only PT file cannot provide the configured region column"
+                )
+            gradients = loaded
+        elif isinstance(loaded, dict):
+            if region_column:
+                if region_column not in loaded:
+                    raise KeyError(
+                        f"Region key {region_column!r} is missing from the PT file"
+                    )
+                region_values = loaded[region_column]
+            if gradient_columns and all(column in loaded for column in gradient_columns):
+                gradients = torch.stack(
+                    [torch.as_tensor(loaded[column]) for column in gradient_columns], dim=1
+                )
+            else:
+                value = loaded.get("gradients", loaded.get("positional_features"))
+                if value is None:
+                    raise KeyError("PT gradient dictionary needs a 'gradients' tensor")
+                gradients = torch.as_tensor(value)
+        else:
+            raise TypeError("PT gradient file must contain a tensor or dictionary")
+    elif gradient_path.suffix == ".npz":
+        with np.load(gradient_path, allow_pickle=False) as archive:
+            if region_column:
+                if region_column not in archive:
+                    raise KeyError(
+                        f"Region array {region_column!r} is missing from the NPZ file"
+                    )
+                region_values = archive[region_column].copy()
+            if gradient_columns and all(column in archive for column in gradient_columns):
+                gradients = torch.tensor(
+                    np.stack([archive[column] for column in gradient_columns], axis=1)
+                )
+            elif "gradients" in archive:
+                gradients = torch.tensor(archive["gradients"])
+            elif "positional_features" in archive:
+                gradients = torch.tensor(archive["positional_features"])
+            else:
+                raise KeyError("NPZ gradient file needs a 'gradients' array")
+    else:
+        raise ValueError("Gradient file must use .csv, .pt, or .npz")
+    return _order_gradient_rows(gradients, region_values, num_regions)
+
+
 def synthetic_atlas(num_regions: int, num_rsns: int) -> Atlas:
     if num_rsns < 2 or num_regions < num_rsns:
         raise ValueError("Synthetic data requires num_regions >= num_rsns >= 2")
@@ -236,6 +342,7 @@ class BrainGraphDataset(Dataset[Data]):
         num_subnetworks: int | None = None,
         subnetwork_seed: int = 42,
         community_method: str = "fc_kmeans",
+        gradient_key: str | None = None,
     ) -> None:
         self.atlas = atlas
         self.node_features = node_features
@@ -251,6 +358,7 @@ class BrainGraphDataset(Dataset[Data]):
         )
         self.subnetwork_seed = subnetwork_seed
         self.community_method = community_method
+        self.gradient_key = gradient_key
         if subnetwork_strategy not in (
             "atlas_rsn",
             "fixed_random",
@@ -303,6 +411,7 @@ class BrainGraphDataset(Dataset[Data]):
             "time_series",
             "X",
             "fc_matrix",
+            self.gradient_key,
         }
         return {key: value for key, value in record.items() if key not in imaging_keys}
 
@@ -361,6 +470,27 @@ class BrainGraphDataset(Dataset[Data]):
                     seed=self.subnetwork_seed,
                 )
             graph.subnetwork_ids = self._community_cache[index].clone()
+        if self.gradient_key is not None:
+            if self.gradient_key not in record:
+                raise KeyError(
+                    f"Subject {key!s} has no positional gradients at "
+                    f"record key {self.gradient_key!r}"
+                )
+            positional_features = torch.as_tensor(
+                record[self.gradient_key], dtype=torch.float32
+            )
+            if (
+                positional_features.ndim != 2
+                or positional_features.shape[0] != self.atlas.num_regions
+                or positional_features.shape[1] < 1
+            ):
+                raise ValueError(
+                    f"Subject {key!s} positional gradients must have shape "
+                    "[num_regions, gradient_dim]"
+                )
+            if not torch.isfinite(positional_features).all():
+                raise ValueError(f"Subject {key!s} positional gradients must be finite")
+            graph.positional_features = positional_features
         graph.region_ids = torch.arange(self.atlas.num_regions)
         return graph
 

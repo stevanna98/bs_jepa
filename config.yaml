@@ -15,6 +15,7 @@ data:
   feature_dim: 32
   bold_key: BOLD
   fc_key: FC
+  gradient_key:
   transpose_bold: false
   graph_strategy: top_k
   top_k: 8
@@ -43,7 +44,13 @@ model:
   predictor_layers: 2
   predictor_heads: 2
   predictor_dropout: 0.0
-  region_positional_encoding: true
+  positional_encoding:
+    type: learned_region
+    gradient_file:
+    gradient_columns: [gradient_1, gradient_2, gradient_3]
+    region_column: region_id
+    trainable_projection: true
+    trainable_coordinates: false
 
 training:
   epochs: 50

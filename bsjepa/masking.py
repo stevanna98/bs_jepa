@@ -80,10 +80,13 @@ def extract_subgraph(data: Data, node_mask: torch.Tensor) -> Data:
     src, dst = data.edge_index
     keep_edges = node_mask[src] & node_mask[dst]
     edge_attr = data.edge_attr[keep_edges] if data.edge_attr is not None else None
-    return Data(
+    subgraph = Data(
         x=data.x[region_ids],
         edge_index=old_to_new[data.edge_index[:, keep_edges]],
         edge_attr=edge_attr,
         region_ids=region_ids,
         num_nodes=region_ids.numel(),
     )
+    if hasattr(data, "positional_features"):
+        subgraph.positional_features = data.positional_features[region_ids]
+    return subgraph
