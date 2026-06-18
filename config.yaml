@@ -23,7 +23,7 @@ data:
   num_workers: 0
 
 masking:
-  num_targets: 4
+  num_targets: 2
 
 model:
   embed_dim: 64
@@ -35,8 +35,8 @@ model:
   encoder_heads: 4
   encoder_dropout: 0.1
   predictor_type: gat
-  predictor_hidden: 8
-  predictor_layers: 1
+  predictor_hidden: 32
+  predictor_layers: 2
   predictor_heads: 2
   predictor_dropout: 0.0
   region_positional_encoding: true
@@ -49,7 +49,7 @@ training:
   warmup_epochs: 0
   weight_decay_start: 0.01
   weight_decay_end: 0.05
-  ema_start: 0.999
+  ema_start: 0.996
   ema_end: 1.0
   clip_grad: 1.0
   prediction_loss: l2
