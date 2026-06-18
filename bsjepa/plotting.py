@@ -10,16 +10,26 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 
-def _save_figure(path: Path) -> None:
+def _save_figure(path: Path, *, dpi: int, save_pdf: bool) -> None:
     plt.tight_layout()
-    plt.savefig(path, dpi=150, bbox_inches="tight")
+    plt.savefig(path, dpi=dpi, bbox_inches="tight")
+    if save_pdf:
+        plt.savefig(path.with_suffix(".pdf"), bbox_inches="tight")
     plt.close()
 
 
-def save_training_plots(history: list[dict[str, float]], plot_dir: str | Path) -> None:
+def _save_training_plots(
+    history: list[dict[str, float]],
+    plot_dir: str | Path,
+    *,
+    dpi: int = 150,
+    save_pdf: bool = False,
+) -> None:
     """Write loss, per-RSN loss, and collapse diagnostic curves."""
     if not history:
         return
+    if dpi < 1:
+        raise ValueError("Plot DPI must be positive")
     path = Path(plot_dir)
     path.mkdir(parents=True, exist_ok=True)
     epochs = [row["epoch"] for row in history]
@@ -30,7 +40,16 @@ def save_training_plots(history: list[dict[str, float]], plot_dir: str | Path) -
     plt.ylabel("Total loss")
     plt.title("Training loss")
     plt.grid(alpha=0.3)
-    _save_figure(path / "training_loss.png")
+    _save_figure(path / "training_loss.png", dpi=dpi, save_pdf=save_pdf)
+
+    if any("similarity" in row for row in history):
+        plt.figure(figsize=(7, 4))
+        plt.plot(epochs, [row.get("similarity", float("nan")) for row in history])
+        plt.xlabel("Epoch")
+        plt.ylabel("Cosine prediction loss")
+        plt.title("JEPA Prediction Loss")
+        plt.grid(alpha=0.3)
+        _save_figure(path / "prediction_loss.png", dpi=dpi, save_pdf=save_pdf)
 
     rsn_keys = sorted(
         {key for row in history for key in row if key.startswith("rsn_loss_")},
@@ -46,7 +65,9 @@ def save_training_plots(history: list[dict[str, float]], plot_dir: str | Path) -
         plt.title("Per-RSN prediction loss")
         plt.grid(alpha=0.3)
         plt.legend(fontsize="small", ncol=2)
-        _save_figure(path / "rsn_prediction_losses.png")
+        _save_figure(
+            path / "rsn_prediction_losses.png", dpi=dpi, save_pdf=save_pdf
+        )
 
     collapse_groups = {
         "anti_collapse_losses.png": [
@@ -91,7 +112,7 @@ def save_training_plots(history: list[dict[str, float]], plot_dir: str | Path) -
         plt.title(filename.removesuffix(".png").replace("_", " ").title())
         plt.grid(alpha=0.3)
         plt.legend(fontsize="small")
-        _save_figure(path / filename)
+        _save_figure(path / filename, dpi=dpi, save_pdf=save_pdf)
 
     downstream_rows = [row for row in history if "pmat_val_mae" in row]
     if downstream_rows:
@@ -117,4 +138,30 @@ def save_training_plots(history: list[dict[str, float]], plot_dir: str | Path) -
         axes[1].grid(alpha=0.3)
         axes[1].legend()
         figure.suptitle("Frozen Target Encoder PMAT Evaluation")
-        _save_figure(path / "pmat_downstream_metrics.png")
+        _save_figure(
+            path / "pmat_downstream_metrics.png", dpi=dpi, save_pdf=save_pdf
+        )
+
+
+def save_training_plots(
+    history: list[dict[str, float]],
+    plot_dir: str | Path,
+    *,
+    dpi: int = 150,
+    save_pdf: bool = False,
+) -> None:
+    """Save consistently styled, headless diagnostic plots."""
+    style = {
+        "font.size": 10,
+        "axes.titlesize": 12,
+        "axes.labelsize": 10,
+        "legend.fontsize": 9,
+        "lines.linewidth": 1.8,
+        "figure.facecolor": "white",
+        "axes.facecolor": "white",
+        "savefig.facecolor": "white",
+    }
+    with matplotlib.rc_context(style):
+        _save_training_plots(
+            history, plot_dir, dpi=dpi, save_pdf=save_pdf
+        )

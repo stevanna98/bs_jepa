@@ -123,7 +123,7 @@ def main() -> None:
         f"device={device} subjects={len(training_dataset)} regions={atlas.num_regions} "
         f"trainable_parameters={sum(p.numel() for p in model.parameters() if p.requires_grad)}"
     )
-    pretrain(
+    history = pretrain(
         model,
         loader,
         collator,
@@ -133,6 +133,22 @@ def main() -> None:
         evaluation_dataset=evaluation_dataset,
         evaluation_config=evaluation_config if evaluation_dataset is not None else None,
     )
+    if bool(config["training"].get("save_final_artifact", True)):
+        from bsjepa.artifacts import export_final_artifact
+
+        artifact_path = export_final_artifact(
+            model,
+            history,
+            config,
+            effective_model_config=model_config,
+            input_feature_dim=int(sample.x.shape[1]),
+            num_regions=atlas.num_regions,
+            num_rsns=atlas.num_rsns,
+            total_subjects=len(dataset),
+            pretraining_subjects=len(training_dataset),
+            heldout_subjects=len(evaluation_dataset) if evaluation_dataset is not None else 0,
+        )
+        print(f"final_artifact={artifact_path}", flush=True)
 
 
 if __name__ == "__main__":

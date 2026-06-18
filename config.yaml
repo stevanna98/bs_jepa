@@ -39,7 +39,7 @@ model:
   region_positional_encoding: true
 
 training:
-  epochs: 100
+  epochs: 50
   lr: 0.0001
   start_lr: 0.000001
   final_lr: 0.000001
@@ -58,9 +58,13 @@ training:
   save_plots: true
   plot_frequency: 1
   collapse_metrics: true
+  save_final_artifact: true
+  artifact_name:
+  publication_plot_dpi: 300
+  save_plot_pdf: true
 
 evaluation:
-  enabled: true
+  enabled: false
   pmat_csv: /content/drive/MyDrive/IMPERIAL/data/HCP_YA_subjects_2026_04_02_12_52_45.csv
   label_column: PMAT24_A_CR
   subject_column: Subject
