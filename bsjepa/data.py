@@ -64,7 +64,7 @@ def synthetic_atlas(num_regions: int, num_rsns: int) -> Atlas:
 def pearson_correlation(time_series: torch.Tensor) -> torch.Tensor:
     """Compute an FC matrix from region-by-time BOLD data."""
     centered = time_series - time_series.mean(dim=1, keepdim=True)
-    scaled = centered / centered.std(dim=1, keepdim=True).clamp_min(1e-8)
+    scaled = centered / centered.std(dim=1, keepdim=True, unbiased=False).clamp_min(1e-8)
     return (scaled @ scaled.T) / time_series.shape[1]
 
 
@@ -84,8 +84,13 @@ def build_graph(
         node_count = adjacency.shape[0]
         indices = adjacency.abs().topk(min(top_k, node_count - 1), dim=1).indices
         selected = torch.zeros_like(adjacency)
+        selected_mask = torch.zeros_like(adjacency, dtype=torch.bool)
         selected.scatter_(1, indices, adjacency.gather(1, indices))
-        adjacency = ((selected.clamp_min(0) + selected.T.clamp_min(0)) / 2)
+        selected_mask.scatter_(1, indices, True)
+        union_mask = selected_mask | selected_mask.T
+        selected_count = selected_mask.float() + selected_mask.T.float()
+        adjacency = (selected + selected.T) / selected_count.clamp_min(1)
+        adjacency *= union_mask
     elif strategy == "absolute_threshold":
         adjacency *= adjacency.abs() >= threshold
     elif strategy != "dense":
@@ -100,8 +105,18 @@ def build_graph(
 
 def _zscore(time_series: torch.Tensor) -> torch.Tensor:
     return (time_series - time_series.mean(1, keepdim=True)) / time_series.std(
-        1, keepdim=True
+        1, keepdim=True, unbiased=False
     ).clamp_min(1e-8)
+
+
+def _validate_bold_shape(bold: torch.Tensor, expected_regions: int, subject: Any) -> None:
+    if bold.ndim != 2:
+        raise ValueError(f"Subject {subject!s} BOLD data must be region-by-time")
+    if bold.shape[0] != expected_regions:
+        raise ValueError(
+            f"Subject {subject!s} BOLD data has {bold.shape[0]} regions; "
+            f"atlas has {expected_regions}"
+        )
 
 
 def _load_file(path: Path) -> Any:
@@ -168,6 +183,8 @@ class BrainGraphDataset(Dataset[Data]):
         bold = None if bold_value is None else torch.as_tensor(bold_value, dtype=torch.float32)
         if bold is not None and self.transpose_bold:
             bold = bold.T
+        if bold is not None:
+            _validate_bold_shape(bold, self.atlas.num_regions, key)
         if fc_value is None:
             if bold is None:
                 raise KeyError(f"Subject {key!s} contains neither BOLD nor FC data")

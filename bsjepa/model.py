@@ -60,6 +60,8 @@ class GraphNetwork(nn.Module):
             raise ValueError("num_layers must be positive")
         if kind not in ("gcn", "gat"):
             raise ValueError(f"Unsupported graph layer: {kind}")
+        if feature_mode not in ("passthrough", "conv1d"):
+            raise ValueError(f"Unsupported feature mode: {feature_mode}")
         self.kind = kind
         self.dropout = dropout
         self.feature_extractor = (

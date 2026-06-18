@@ -1,10 +1,10 @@
 seed: 42
-output_dir: /content/drive/MyDrive/IMPERIAL/bs_jepa/
+output_dir: outputs/
 
 data:
   # Use "synthetic", a subject dictionary (.pkl/.pt), or a directory of .pt/.npz files.
-  source: /content/drive/MyDrive/IMPERIAL/data/subject_data_1_cleaned_precise_age.pkl
-  atlas_csv: /content/drive/MyDrive/IMPERIAL/data/glasser379_to_rsn12.csv
+  source: synthetic
+  atlas_csv:
   num_subjects: 16
   num_regions: 40
   num_rsns: 8
@@ -32,11 +32,11 @@ model:
   encoder_heads: 4
   encoder_dropout: 0.1
   predictor_type: gat
-  predictor_hidden: 64
-  predictor_layers: 2
-  predictor_heads: 4
-  predictor_dropout: 0.1
-  region_positional_encoding: true
+  predictor_hidden: 8
+  predictor_layers: 1
+  predictor_heads: 2
+  predictor_dropout: 0.0
+  region_positional_encoding: false
 
 training:
   epochs: 2
@@ -55,3 +55,6 @@ training:
   target_std: 0.1
   rsn_diversity_weight: 0.05
   checkpoint_frequency: 1
+  save_plots: true
+  plot_frequency: 1
+  collapse_metrics: true

@@ -10,7 +10,12 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from .losses import jepa_loss, rsn_diversity_loss
+from .losses import (
+    jepa_loss,
+    per_rsn_prediction_losses,
+    representation_diagnostics,
+    rsn_diversity_loss,
+)
 from .masking import SubnetworkMaskCollator
 from .model import BSJEPA
 
@@ -55,7 +60,7 @@ def pretrain(
     device: torch.device,
     output_dir: str | Path,
 ) -> list[dict[str, float]]:
-    """Run BS-JEPA pretraining and write compact epoch checkpoints."""
+    """Run BS-JEPA pretraining and write checkpoints and diagnostic plots."""
     epochs = int(config["epochs"])
     total_steps = max(epochs * len(loader), 1)
     warmup_steps = int(config.get("warmup_epochs", 0)) * len(loader)
@@ -66,6 +71,9 @@ def pretrain(
     output_path.mkdir(parents=True, exist_ok=True)
     checkpoint_frequency = int(config.get("checkpoint_frequency", 1))
     diversity_weight = float(config.get("rsn_diversity_weight", 0.0))
+    save_plots = bool(config.get("save_plots", True))
+    plot_frequency = int(config.get("plot_frequency", 1))
+    collapse_metrics = bool(config.get("collapse_metrics", True))
     history: list[dict[str, float]] = []
     global_step = 0
 
@@ -73,12 +81,15 @@ def pretrain(
     for epoch in range(1, epochs + 1):
         model.train()
         totals: dict[str, float] = {}
+        metric_counts: dict[str, int] = {}
+        rsn_loss_sums: dict[int, float] = {}
+        rsn_row_counts: dict[int, int] = {}
         batch_count = 0
         for raw_graphs in loader:
             batch, masks = mask_collator(raw_graphs)
             batch, masks = batch.to(device), masks.to(device)
             optimizer.zero_grad(set_to_none=True)
-            outputs = model(batch, masks, return_groups=diversity_weight > 0)
+            outputs = model(batch, masks, return_groups=True)
             predictions, targets, context = outputs[:3]
             loss, metrics = jepa_loss(
                 predictions,
@@ -89,8 +100,19 @@ def pretrain(
                 covariance_weight=float(config["covariance_weight"]),
                 target_std=float(config["target_std"]),
             )
+            if collapse_metrics:
+                metrics.update(representation_diagnostics(predictions, targets, context))
+            row_group_ids, group_rsn_ids = outputs[3], outputs[4]
+            rsn_losses = per_rsn_prediction_losses(
+                predictions, targets, row_group_ids, group_rsn_ids
+            )
+            for rsn_id, (loss_sum, row_count) in rsn_losses.items():
+                rsn_loss_sums[rsn_id] = rsn_loss_sums.get(rsn_id, 0.0) + loss_sum
+                rsn_row_counts[rsn_id] = rsn_row_counts.get(rsn_id, 0) + row_count
             if diversity_weight > 0:
-                diversity = rsn_diversity_loss(predictions, outputs[3], outputs[4])
+                diversity = rsn_diversity_loss(
+                    predictions, row_group_ids, group_rsn_ids
+                )
                 loss = loss + diversity_weight * diversity
                 metrics["rsn_diversity"] = diversity.item()
             loss.backward()
@@ -125,12 +147,24 @@ def pretrain(
 
             batch_count += 1
             totals["loss"] = totals.get("loss", 0.0) + loss.item()
+            metric_counts["loss"] = metric_counts.get("loss", 0) + 1
             for name, value in metrics.items():
+                if not math.isfinite(value):
+                    continue
                 totals[name] = totals.get(name, 0.0) + value
+                metric_counts[name] = metric_counts.get(name, 0) + 1
 
         epoch_metrics = {
             "epoch": float(epoch),
-            **{name: value / max(batch_count, 1) for name, value in totals.items()},
+            **{
+                name: value / max(metric_counts.get(name, batch_count), 1)
+                for name, value in totals.items()
+            },
+            **{
+                f"rsn_loss_{rsn_id}": loss_sum / rsn_row_counts[rsn_id]
+                for rsn_id, loss_sum in sorted(rsn_loss_sums.items())
+                if rsn_row_counts[rsn_id] > 0
+            },
             "learning_rate": learning_rate,
             "ema_momentum": momentum,
         }
@@ -149,4 +183,10 @@ def pretrain(
                 },
                 output_path / f"checkpoint_{epoch:04d}.pt",
             )
+        if save_plots and plot_frequency > 0 and (
+            epoch % plot_frequency == 0 or epoch == epochs
+        ):
+            from .plotting import save_training_plots
+
+            save_training_plots(history, output_path / "plots")
     return history
