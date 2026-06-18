@@ -61,7 +61,7 @@ training:
 
 evaluation:
   enabled: true
-  pmat_csv: /Users/stefanovannoni/Desktop/IMPERIAL COLLEGE/Data/data/hcp_ya_dataset/HCP_YA_subjects_2026_04_02_12_52_45.csv
+  pmat_csv: /content/drive/MyDrive/IMPERIAL/data/HCP_YA_subjects_2026_04_02_12_52_45.csv
   label_column: PMAT24_A_CR
   subject_column: Subject
   heldout_size: 64
