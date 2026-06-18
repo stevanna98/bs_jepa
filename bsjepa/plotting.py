@@ -142,6 +142,36 @@ def _save_training_plots(
             path / "pmat_downstream_metrics.png", dpi=dpi, save_pdf=save_pdf
         )
 
+    gender_rows = [row for row in history if "gender_probe_val_accuracy" in row]
+    if gender_rows:
+        probe_epochs = [row["epoch"] for row in gender_rows]
+        figure, axes = plt.subplots(2, 1, figsize=(8, 7), sharex=True)
+        axes[0].plot(
+            probe_epochs,
+            [row["gender_probe_val_accuracy"] for row in gender_rows],
+            label="Accuracy",
+        )
+        axes[0].plot(
+            probe_epochs,
+            [row["gender_probe_val_balanced_accuracy"] for row in gender_rows],
+            label="Balanced accuracy",
+        )
+        axes[0].set_ylabel("Validation score")
+        axes[0].set_ylim(0, 1)
+        axes[0].grid(alpha=0.3)
+        axes[0].legend()
+        axes[1].plot(
+            probe_epochs,
+            [row["gender_probe_val_loss"] for row in gender_rows],
+            label="Cross-entropy loss",
+        )
+        axes[1].set_xlabel("Pretraining epoch")
+        axes[1].set_ylabel("Validation loss")
+        axes[1].grid(alpha=0.3)
+        axes[1].legend()
+        figure.suptitle("Frozen Target Encoder Gender Probe")
+        _save_figure(path / "gender_probe_metrics.png", dpi=dpi, save_pdf=save_pdf)
+
 
 def save_training_plots(
     history: list[dict[str, float]],

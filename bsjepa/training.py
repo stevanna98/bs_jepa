@@ -11,6 +11,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from .evaluation import LabeledGraphDataset, evaluate_pmat
+from .linear_probe import evaluate_gender_probe
 from .losses import (
     jepa_loss,
     per_rsn_prediction_losses,
@@ -62,6 +63,8 @@ def pretrain(
     output_dir: str | Path,
     evaluation_dataset: LabeledGraphDataset | None = None,
     evaluation_config: dict[str, Any] | None = None,
+    linear_probe_dataset: LabeledGraphDataset | None = None,
+    linear_probe_config: dict[str, Any] | None = None,
 ) -> list[dict[str, float]]:
     """Run BS-JEPA pretraining and write checkpoints and diagnostic plots."""
     epochs = int(config["epochs"])
@@ -84,6 +87,13 @@ def pretrain(
     )
     if evaluation_dataset is not None and evaluation_frequency <= 0:
         raise ValueError("evaluation.frequency_epochs must be positive")
+    linear_probe_frequency = (
+        int(linear_probe_config["eval_frequency_epochs"])
+        if linear_probe_config is not None and linear_probe_dataset is not None
+        else 0
+    )
+    if linear_probe_dataset is not None and linear_probe_frequency <= 0:
+        raise ValueError("linear_probe.eval_frequency_epochs must be positive")
     history: list[dict[str, float]] = []
     global_step = 0
 
@@ -179,6 +189,7 @@ def pretrain(
             "learning_rate": learning_rate,
             "ema_momentum": momentum,
         }
+        downstream_evaluated = False
         if evaluation_frequency > 0 and (
             epoch % evaluation_frequency == 0 or epoch == epochs
         ):
@@ -190,6 +201,19 @@ def pretrain(
                     device=device,
                 )
             )
+            downstream_evaluated = True
+        if linear_probe_frequency > 0 and (
+            epoch % linear_probe_frequency == 0 or epoch == epochs
+        ):
+            epoch_metrics.update(
+                evaluate_gender_probe(
+                    model,
+                    linear_probe_dataset,
+                    linear_probe_config,
+                    device=device,
+                )
+            )
+            downstream_evaluated = True
         history.append(epoch_metrics)
         summary = " ".join(f"{key}={value:.5g}" for key, value in epoch_metrics.items())
         print(summary, flush=True)
@@ -206,8 +230,12 @@ def pretrain(
                 },
                 output_path / f"checkpoint_{epoch:04d}.pt",
             )
-        if save_plots and plot_frequency > 0 and (
-            epoch % plot_frequency == 0 or epoch == epochs
+        if save_plots and (
+            downstream_evaluated
+            or (
+                plot_frequency > 0
+                and (epoch % plot_frequency == 0 or epoch == epochs)
+            )
         ):
             from .plotting import save_training_plots
 

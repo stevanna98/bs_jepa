@@ -178,11 +178,28 @@ class BrainGraphDataset(Dataset[Data]):
         """Return subject identifiers in dataset-index order."""
         return list(self._subjects)
 
-    def __getitem__(self, index: int) -> Data:
+    def get_subject_metadata(self, index: int) -> dict[str, Any]:
+        """Return scalar subject metadata without imaging arrays."""
+        record = self._get_record(index)
+        imaging_keys = {
+            self.bold_key,
+            self.fc_key,
+            "time_series",
+            "X",
+            "fc_matrix",
+        }
+        return {key: value for key, value in record.items() if key not in imaging_keys}
+
+    def _get_record(self, index: int) -> dict[Any, Any]:
         key = self._subjects[index]
         record = _load_file(key) if self._records is None else self._records[key]
         if not isinstance(record, dict):
             raise TypeError(f"Subject {key!s} is not a dictionary")
+        return record
+
+    def __getitem__(self, index: int) -> Data:
+        key = self._subjects[index]
+        record = self._get_record(index)
         bold_value = record.get(self.bold_key, record.get("time_series", record.get("X")))
         fc_value = record.get(self.fc_key, record.get("fc_matrix"))
         bold = None if bold_value is None else torch.as_tensor(bold_value, dtype=torch.float32)
@@ -238,6 +255,10 @@ class SyntheticBrainDataset(Dataset[Data]):
     def subject_ids(self) -> list[str]:
         return [f"synthetic_{index}" for index in range(self.num_subjects)]
 
+    def get_subject_metadata(self, index: int) -> dict[str, str]:
+        """Provide balanced synthetic labels for probe smoke tests."""
+        return {"gender": "F" if index % 2 == 0 else "M"}
+
     def __getitem__(self, index: int) -> Data:
         generator = torch.Generator().manual_seed(self.seed + index)
         regions = self.atlas.num_regions
@@ -250,3 +271,30 @@ class SyntheticBrainDataset(Dataset[Data]):
         graph.rsn_ids = self.atlas.rsn_ids.clone()
         graph.region_ids = torch.arange(regions)
         return graph
+
+
+class SubjectSubset(Dataset[Data]):
+    """Index subset that preserves subject IDs and metadata access."""
+
+    def __init__(self, dataset: Dataset[Data], indices: list[int]) -> None:
+        self.dataset = dataset
+        self.indices = indices
+
+    def __len__(self) -> int:
+        return len(self.indices)
+
+    def __getitem__(self, index: int) -> Data:
+        return self.dataset[self.indices[index]]
+
+    @property
+    def subject_ids(self) -> list[Any]:
+        source_ids = getattr(self.dataset, "subject_ids", None)
+        if source_ids is None:
+            raise TypeError("Underlying dataset does not expose subject_ids")
+        return [source_ids[index] for index in self.indices]
+
+    def get_subject_metadata(self, index: int) -> dict[str, Any]:
+        metadata_getter = getattr(self.dataset, "get_subject_metadata", None)
+        if metadata_getter is None:
+            raise TypeError("Underlying dataset does not expose subject metadata")
+        return metadata_getter(self.indices[index])

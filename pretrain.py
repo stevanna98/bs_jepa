@@ -23,6 +23,7 @@ from bsjepa import (
     split_pmat_holdout,
 )
 from bsjepa.data import synthetic_atlas
+from bsjepa.linear_probe import split_gender_probe_holdout
 
 
 def parse_args() -> argparse.Namespace:
@@ -99,6 +100,18 @@ def main() -> None:
             f"PMAT split: pretraining_subjects={len(training_dataset)} "
             f"heldout_subjects={len(evaluation_dataset)}"
         )
+    linear_probe_config = config.get("linear_probe", {})
+    linear_probe_dataset = None
+    if bool(linear_probe_config.get("enabled", False)):
+        training_dataset, linear_probe_dataset = split_gender_probe_holdout(
+            training_dataset, linear_probe_config
+        )
+        print(
+            f"Gender probe split: pretraining_subjects={len(training_dataset)} "
+            f"heldout_subjects={len(linear_probe_dataset)} "
+            f"female={int((linear_probe_dataset.labels == 0).sum())} "
+            f"male={int((linear_probe_dataset.labels == 1).sum())}"
+        )
     loader = DataLoader(
         training_dataset,
         batch_size=int(data_config["batch_size"]),
@@ -132,6 +145,10 @@ def main() -> None:
         output_dir=config["output_dir"],
         evaluation_dataset=evaluation_dataset,
         evaluation_config=evaluation_config if evaluation_dataset is not None else None,
+        linear_probe_dataset=linear_probe_dataset,
+        linear_probe_config=(
+            linear_probe_config if linear_probe_dataset is not None else None
+        ),
     )
     if bool(config["training"].get("save_final_artifact", True)):
         from bsjepa.artifacts import export_final_artifact
@@ -146,7 +163,12 @@ def main() -> None:
             num_rsns=atlas.num_rsns,
             total_subjects=len(dataset),
             pretraining_subjects=len(training_dataset),
-            heldout_subjects=len(evaluation_dataset) if evaluation_dataset is not None else 0,
+            heldout_subjects=(
+                len(evaluation_dataset) if evaluation_dataset is not None else 0
+            ),
+            gender_probe_heldout_subjects=(
+                len(linear_probe_dataset) if linear_probe_dataset is not None else 0
+            ),
         )
         print(f"final_artifact={artifact_path}", flush=True)
 

@@ -91,6 +91,7 @@ def export_final_artifact(
     total_subjects: int,
     pretraining_subjects: int,
     heldout_subjects: int,
+    gender_probe_heldout_subjects: int = 0,
 ) -> Path:
     """Save final weights, reconstruction metadata, history, and final plots."""
     if not history:
@@ -141,11 +142,13 @@ def export_final_artifact(
         "num_target_subnetworks": int(config["masking"]["num_targets"]),
         "training": training_config,
         "evaluation": config.get("evaluation", {}),
+        "linear_probe": config.get("linear_probe", {}),
         "data": {
             **config["data"],
             "total_subjects": total_subjects,
             "pretraining_subjects": pretraining_subjects,
             "heldout_pmat_subjects": heldout_subjects,
+            "heldout_gender_probe_subjects": gender_probe_heldout_subjects,
         },
         "random_seed": int(config["seed"]),
         "parameters": {

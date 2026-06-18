@@ -79,3 +79,17 @@ evaluation:
   batch_size: 32
   validation_fraction: 0.25
   random_seed: 42
+
+linear_probe:
+  enabled: true
+  task: gender
+  metadata_key: gender
+  family_key: Family_ID
+  heldout_size: 64
+  eval_frequency_epochs: 5
+  probe_train_fraction: 0.7
+  probe_epochs: 100
+  probe_lr: 0.001
+  probe_weight_decay: 0.0
+  batch_size: 32
+  random_seed: 42

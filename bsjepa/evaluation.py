@@ -12,11 +12,12 @@ from typing import Any
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, Dataset, Subset
+from torch.utils.data import DataLoader, Dataset
 from torch_geometric.data import Batch, Data
 from torch_geometric.utils import unbatch
 
 from .model import BSJEPA
+from .data import SubjectSubset
 
 
 def normalize_subject_id(value: Any) -> str:
@@ -35,12 +36,14 @@ class LabeledGraphDataset(Dataset[tuple[Data, torch.Tensor]]):
         self,
         dataset: Dataset[Data],
         indices: list[int],
-        labels: list[float],
+        labels: list[float | int],
         subject_ids: list[str],
+        *,
+        label_dtype: torch.dtype = torch.float32,
     ) -> None:
         self.dataset = dataset
         self.indices = indices
-        self.labels = torch.tensor(labels, dtype=torch.float32)
+        self.labels = torch.tensor(labels, dtype=label_dtype)
         self.subject_ids = subject_ids
 
     def __len__(self) -> int:
@@ -52,7 +55,7 @@ class LabeledGraphDataset(Dataset[tuple[Data, torch.Tensor]]):
 
 def split_pmat_holdout(
     dataset: Dataset[Data], config: dict[str, Any]
-) -> tuple[Subset[Data], LabeledGraphDataset]:
+) -> tuple[SubjectSubset, LabeledGraphDataset]:
     """Deterministically reserve labeled subjects and remove them from pretraining."""
     raw_subject_ids = getattr(dataset, "subject_ids", None)
     if raw_subject_ids is None:
@@ -131,11 +134,11 @@ def split_pmat_holdout(
         [label for _, _, label in selected],
         [subject_id for _, subject_id, _ in selected],
     )
-    return Subset(dataset, pretraining_indices), heldout
+    return SubjectSubset(dataset, pretraining_indices), heldout
 
 
 @torch.no_grad()
-def _extract_embeddings(
+def extract_graph_embeddings(
     model: BSJEPA,
     dataset: LabeledGraphDataset,
     *,
@@ -210,7 +213,7 @@ def evaluate_pmat(
         raise ValueError("evaluation.regressor_epochs must be positive")
     if regressor_lr <= 0:
         raise ValueError("evaluation.regressor_lr must be positive")
-    embeddings, labels = _extract_embeddings(
+    embeddings, labels = extract_graph_embeddings(
         model,
         dataset,
         device=device,
