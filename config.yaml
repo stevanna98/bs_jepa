@@ -102,3 +102,28 @@ linear_probe:
   probe_weight_decay: 0.0
   batch_size: 32
   random_seed: 42
+
+downstream:
+  enabled: true
+  task: gender
+  # Leave empty to read gender directly from each subject record in the PKL.
+  metadata_csv:
+  subject_column: Subject
+  label_column: Gender
+  metadata_key: gender
+  family_key: Family_ID
+  family_column: Family_ID
+  train_fraction: 0.8
+  random_seed: 42
+  batch_size: 16
+  epochs: 100
+  lr: 0.0001
+  weight_decay: 0.01
+  classification_weight: 1.0
+  jepa_weight: 1.0
+  pooling: mean
+  ema_start: 0.996
+  ema_end: 1.0
+  clip_grad: 1.0
+  checkpoint_frequency: 1
+  save_plots: true

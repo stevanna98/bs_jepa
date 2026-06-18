@@ -27,8 +27,8 @@ from bsjepa.linear_probe import split_gender_probe_holdout
 from bsjepa.model import resolve_positional_encoding_config
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Pretrain BS-JEPA")
+def parse_args(description: str = "Pretrain BS-JEPA") -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--config", type=Path, default=Path(__file__).with_name("config.yaml"))
     parser.add_argument(
         "--set", action="append", default=[], metavar="SECTION.KEY=VALUE",

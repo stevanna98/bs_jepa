@@ -223,3 +223,48 @@ def save_training_plots(
         _save_training_plots(
             history, plot_dir, dpi=dpi, save_pdf=save_pdf
         )
+
+
+def save_downstream_plots(
+    history: list[dict[str, float]],
+    plot_dir: str | Path,
+    *,
+    dpi: int = 150,
+) -> None:
+    """Save headless loss and classification curves for end-to-end training."""
+    if not history:
+        return
+    path = Path(plot_dir)
+    path.mkdir(parents=True, exist_ok=True)
+    epochs = [row["epoch"] for row in history]
+    style = {"lines.linewidth": 1.8, "figure.facecolor": "white"}
+    with matplotlib.rc_context(style):
+        plt.figure(figsize=(8, 5))
+        for key, label in (
+            ("total_loss", "Total loss"),
+            ("jepa_l2_loss", "JEPA L2 loss"),
+            ("classification_ce_loss", "Training CE"),
+            ("val_ce_loss", "Validation CE"),
+        ):
+            plt.plot(epochs, [row[key] for row in history], label=label)
+        plt.xlabel("Epoch")
+        plt.ylabel("Loss")
+        plt.title("End-to-End Gender Training Losses")
+        plt.grid(alpha=0.3)
+        plt.legend()
+        _save_figure(path / "downstream_losses.png", dpi=dpi, save_pdf=False)
+
+        plt.figure(figsize=(8, 5))
+        for key, label in (
+            ("train_accuracy", "Training accuracy"),
+            ("val_accuracy", "Validation accuracy"),
+            ("val_balanced_accuracy", "Validation balanced accuracy"),
+        ):
+            plt.plot(epochs, [row[key] for row in history], label=label)
+        plt.xlabel("Epoch")
+        plt.ylabel("Score")
+        plt.ylim(0, 1)
+        plt.title("End-to-End Gender Classification")
+        plt.grid(alpha=0.3)
+        plt.legend()
+        _save_figure(path / "downstream_accuracy.png", dpi=dpi, save_pdf=False)
