@@ -25,7 +25,7 @@ def save_training_plots(history: list[dict[str, float]], plot_dir: str | Path) -
     epochs = [row["epoch"] for row in history]
 
     plt.figure(figsize=(7, 4))
-    plt.plot(epochs, [row["loss"] for row in history], marker="o")
+    plt.plot(epochs, [row["loss"] for row in history])
     plt.xlabel("Epoch")
     plt.ylabel("Total loss")
     plt.title("Training loss")
@@ -40,7 +40,7 @@ def save_training_plots(history: list[dict[str, float]], plot_dir: str | Path) -
         plt.figure(figsize=(8, 5))
         for key in rsn_keys:
             values = [row.get(key, float("nan")) for row in history]
-            plt.plot(epochs, values, marker="o", label=f"RSN {key.rsplit('_', 1)[1]}")
+            plt.plot(epochs, values, label=f"RSN {key.rsplit('_', 1)[1]}")
         plt.xlabel("Epoch")
         plt.ylabel("Cosine prediction loss")
         plt.title("Per-RSN prediction loss")
@@ -84,7 +84,6 @@ def save_training_plots(history: list[dict[str, float]], plot_dir: str | Path) -
             plt.plot(
                 epochs,
                 [row.get(key, float("nan")) for row in history],
-                marker="o",
                 label=key.replace("_", " "),
             )
         plt.xlabel("Epoch")
@@ -102,7 +101,6 @@ def save_training_plots(history: list[dict[str, float]], plot_dir: str | Path) -
             axes[0].plot(
                 evaluation_epochs,
                 [row[key] for row in downstream_rows],
-                marker="o",
                 label=key.removeprefix("pmat_val_").upper(),
             )
         axes[0].set_ylabel("PMAT score error")
@@ -112,7 +110,6 @@ def save_training_plots(history: list[dict[str, float]], plot_dir: str | Path) -
             axes[1].plot(
                 evaluation_epochs,
                 [row[key] for row in downstream_rows],
-                marker="o",
                 label=key.removeprefix("pmat_val_").replace("r2", "R²").title(),
             )
         axes[1].set_xlabel("Pretraining epoch")
