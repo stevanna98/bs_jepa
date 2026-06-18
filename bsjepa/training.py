@@ -14,9 +14,9 @@ from .evaluation import LabeledGraphDataset, evaluate_pmat
 from .linear_probe import evaluate_gender_probe
 from .losses import (
     jepa_loss,
-    per_rsn_prediction_losses,
+    per_subnetwork_prediction_losses,
     representation_diagnostics,
-    rsn_diversity_loss,
+    subnetwork_diversity_loss,
     subject_specificity_diagnostics,
 )
 from .masking import SubnetworkMaskCollator
@@ -66,6 +66,7 @@ def pretrain(
     evaluation_config: dict[str, Any] | None = None,
     linear_probe_dataset: LabeledGraphDataset | None = None,
     linear_probe_config: dict[str, Any] | None = None,
+    subnetwork_strategy: str = "atlas_rsn",
 ) -> list[dict[str, float]]:
     """Run BS-JEPA pretraining and write checkpoints and diagnostic plots."""
     epochs = int(config["epochs"])
@@ -99,6 +100,17 @@ def pretrain(
     )
     if linear_probe_dataset is not None and linear_probe_frequency <= 0:
         raise ValueError("linear_probe.eval_frequency_epochs must be positive")
+    if subnetwork_strategy not in (
+        "atlas_rsn",
+        "fixed_random",
+        "subject_communities",
+    ):
+        raise ValueError(f"Unknown subnetwork strategy: {subnetwork_strategy}")
+    subnetwork_loss_prefix = {
+        "atlas_rsn": "rsn_loss",
+        "fixed_random": "subnetwork_loss",
+        "subject_communities": "community_index_loss",
+    }[subnetwork_strategy]
     history: list[dict[str, float]] = []
     global_step = 0
 
@@ -133,7 +145,7 @@ def pretrain(
             )
             if collapse_metrics:
                 metrics.update(representation_diagnostics(predictions, targets, context))
-            row_group_ids, group_rsn_ids = outputs[3], outputs[4]
+            row_group_ids, group_subnetwork_ids = outputs[3], outputs[4]
             if subject_specificity_metrics:
                 metrics.update(
                     subject_specificity_diagnostics(
@@ -145,23 +157,32 @@ def pretrain(
                         outputs[8],
                     )
                 )
-            rsn_losses = per_rsn_prediction_losses(
+            subnetwork_losses = per_subnetwork_prediction_losses(
                 predictions,
                 targets,
                 row_group_ids,
-                group_rsn_ids,
+                group_subnetwork_ids,
                 prediction_loss=prediction_loss,
             )
-            for rsn_id, (loss_sum, row_count) in rsn_losses.items():
-                rsn_loss_sums[rsn_id] = rsn_loss_sums.get(rsn_id, 0.0) + loss_sum
-                rsn_row_counts[rsn_id] = rsn_row_counts.get(rsn_id, 0) + row_count
-            if diversity_weight > 0:
-                diversity = rsn_diversity_loss(
-                    predictions, row_group_ids, group_rsn_ids
+            for subnetwork_id, (loss_sum, row_count) in subnetwork_losses.items():
+                rsn_loss_sums[subnetwork_id] = (
+                    rsn_loss_sums.get(subnetwork_id, 0.0) + loss_sum
+                )
+                rsn_row_counts[subnetwork_id] = (
+                    rsn_row_counts.get(subnetwork_id, 0) + row_count
+                )
+            if diversity_weight > 0 and subnetwork_strategy != "subject_communities":
+                diversity = subnetwork_diversity_loss(
+                    predictions, row_group_ids, group_subnetwork_ids
                 )
                 # loss = loss + diversity_weight * diversity
                 loss = loss
-                metrics["rsn_diversity"] = diversity.item()
+                diversity_name = (
+                    "rsn_diversity"
+                    if subnetwork_strategy == "atlas_rsn"
+                    else "subnetwork_diversity"
+                )
+                metrics[diversity_name] = diversity.item()
             loss.backward()
             clip_grad = config.get("clip_grad")
             if clip_grad is not None:
@@ -208,7 +229,7 @@ def pretrain(
                 for name, value in totals.items()
             },
             **{
-                f"rsn_loss_{rsn_id}": loss_sum / rsn_row_counts[rsn_id]
+                f"{subnetwork_loss_prefix}_{rsn_id}": loss_sum / rsn_row_counts[rsn_id]
                 for rsn_id, loss_sum in sorted(rsn_loss_sums.items())
                 if rsn_row_counts[rsn_id] > 0
             },

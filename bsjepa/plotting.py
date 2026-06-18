@@ -51,23 +51,36 @@ def _save_training_plots(
         plt.grid(alpha=0.3)
         _save_figure(path / "prediction_loss.png", dpi=dpi, save_pdf=save_pdf)
 
-    rsn_keys = sorted(
-        {key for row in history for key in row if key.startswith("rsn_loss_")},
-        key=lambda key: int(key.rsplit("_", 1)[1]),
+    loss_group_options = (
+        ("rsn_loss_", "RSN", "rsn_prediction_losses.png"),
+        ("subnetwork_loss_", "Subnetwork", "subnetwork_prediction_losses.png"),
+        (
+            "community_index_loss_",
+            "Unaligned community index",
+            "subnetwork_prediction_losses.png",
+        ),
     )
-    if rsn_keys:
+    for prefix, group_label, filename in loss_group_options:
+        group_keys = sorted(
+            {key for row in history for key in row if key.startswith(prefix)},
+            key=lambda key: int(key.rsplit("_", 1)[1]),
+        )
+        if not group_keys:
+            continue
         plt.figure(figsize=(8, 5))
-        for key in rsn_keys:
+        for key in group_keys:
             values = [row.get(key, float("nan")) for row in history]
-            plt.plot(epochs, values, label=f"RSN {key.rsplit('_', 1)[1]}")
+            plt.plot(
+                epochs,
+                values,
+                label=f"{group_label} {key.rsplit('_', 1)[1]}",
+            )
         plt.xlabel("Epoch")
         plt.ylabel("Prediction loss")
-        plt.title("Per-RSN prediction loss")
+        plt.title(f"Per-{group_label} Prediction Loss")
         plt.grid(alpha=0.3)
         plt.legend(fontsize="small", ncol=2)
-        _save_figure(
-            path / "rsn_prediction_losses.png", dpi=dpi, save_pdf=save_pdf
-        )
+        _save_figure(path / filename, dpi=dpi, save_pdf=save_pdf)
 
     collapse_groups = {
         "anti_collapse_losses.png": [
@@ -76,6 +89,7 @@ def _save_training_plots(
             "context_covariance",
             "target_std",
             "rsn_diversity",
+            "subnetwork_diversity",
         ],
         "embedding_standard_deviations.png": [
             "context_embedding_std",

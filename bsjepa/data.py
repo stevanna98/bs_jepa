@@ -15,6 +15,7 @@ from torch_geometric.data import Data
 
 GraphStrategy = Literal["dense", "top_k", "absolute_threshold"]
 NodeFeatures = Literal["bold", "fc_row", "ones"]
+SubnetworkStrategy = Literal["atlas_rsn", "fixed_random", "subject_communities"]
 
 
 @dataclass(frozen=True)
@@ -119,6 +120,91 @@ def _validate_bold_shape(bold: torch.Tensor, expected_regions: int, subject: Any
         )
 
 
+def fixed_random_subnetworks(
+    num_regions: int, num_subnetworks: int, seed: int
+) -> torch.Tensor:
+    """Create a balanced deterministic partition shared by all subjects."""
+    if not 2 <= num_subnetworks <= num_regions:
+        raise ValueError("num_subnetworks must be in [2, num_regions]")
+    generator = torch.Generator().manual_seed(seed)
+    permutation = torch.randperm(num_regions, generator=generator)
+    assignments = torch.empty(num_regions, dtype=torch.long)
+    assignments[permutation] = torch.arange(num_regions) % num_subnetworks
+    return assignments
+
+
+def _repair_empty_clusters(
+    assignments: torch.Tensor, distances: torch.Tensor, num_subnetworks: int
+) -> torch.Tensor:
+    """Move poorly represented points so every cluster has at least one region."""
+    counts = torch.bincount(assignments, minlength=num_subnetworks)
+    for empty_cluster in (counts == 0).nonzero(as_tuple=True)[0]:
+        assigned_distances = distances[
+            torch.arange(len(assignments)), assignments
+        ].clone()
+        assigned_distances[counts[assignments] <= 1] = -1
+        donor = int(assigned_distances.argmax())
+        old_cluster = int(assignments[donor])
+        assignments[donor] = empty_cluster
+        counts[old_cluster] -= 1
+        counts[empty_cluster] += 1
+    return assignments
+
+
+def fc_community_subnetworks(
+    fc: torch.Tensor,
+    num_subnetworks: int,
+    *,
+    method: str = "fc_kmeans",
+    seed: int = 42,
+    max_iterations: int = 25,
+) -> torch.Tensor:
+    """Cluster normalized absolute FC profiles into exactly k subject communities."""
+    if method not in {"fc_kmeans", "kmeans"}:
+        raise ValueError(
+            f"Unsupported community method {method!r}; use 'fc_kmeans'"
+        )
+    num_regions = fc.shape[0]
+    if fc.ndim != 2 or fc.shape[1] != num_regions:
+        raise ValueError("FC matrix must be square")
+    if not 2 <= num_subnetworks <= num_regions:
+        raise ValueError("num_subnetworks must be in [2, num_regions]")
+    profiles = fc.float().abs().clone()
+    profiles.fill_diagonal_(0)
+    features = torch.nn.functional.normalize(profiles, dim=1)
+    generator = torch.Generator().manual_seed(seed)
+    first_center = int(torch.randint(num_regions, (1,), generator=generator))
+    center_indices = [first_center]
+    minimum_distances = (features - features[first_center]).square().sum(1)
+    for _ in range(1, num_subnetworks):
+        minimum_distances[center_indices] = -1
+        next_center = int(minimum_distances.argmax())
+        if minimum_distances[next_center] <= 0:
+            next_center = next(
+                index for index in range(num_regions) if index not in center_indices
+            )
+        center_indices.append(next_center)
+        distances = (features - features[next_center]).square().sum(1)
+        minimum_distances = torch.minimum(minimum_distances, distances)
+    centers = features[center_indices].clone()
+    assignments = torch.full((num_regions,), -1, dtype=torch.long)
+    for _ in range(max_iterations):
+        distances = torch.cdist(features, centers).square()
+        updated = _repair_empty_clusters(
+            distances.argmin(1), distances, num_subnetworks
+        )
+        if torch.equal(updated, assignments):
+            break
+        assignments = updated
+        centers = torch.stack(
+            [features[assignments == group].mean(0) for group in range(num_subnetworks)]
+        )
+    distances = torch.cdist(features, centers).square()
+    return _repair_empty_clusters(
+        distances.argmin(1), distances, num_subnetworks
+    )
+
+
 def _load_file(path: Path) -> Any:
     if path.suffix == ".pkl":
         with path.open("rb") as handle:
@@ -146,6 +232,10 @@ class BrainGraphDataset(Dataset[Data]):
         graph_strategy: GraphStrategy = "top_k",
         top_k: int = 10,
         threshold: float = 0.2,
+        subnetwork_strategy: SubnetworkStrategy = "atlas_rsn",
+        num_subnetworks: int | None = None,
+        subnetwork_seed: int = 42,
+        community_method: str = "fc_kmeans",
     ) -> None:
         self.atlas = atlas
         self.node_features = node_features
@@ -155,6 +245,32 @@ class BrainGraphDataset(Dataset[Data]):
         self.graph_strategy = graph_strategy
         self.top_k = top_k
         self.threshold = threshold
+        self.subnetwork_strategy = subnetwork_strategy
+        self.num_subnetworks = (
+            atlas.num_rsns if num_subnetworks is None else num_subnetworks
+        )
+        self.subnetwork_seed = subnetwork_seed
+        self.community_method = community_method
+        if subnetwork_strategy not in (
+            "atlas_rsn",
+            "fixed_random",
+            "subject_communities",
+        ):
+            raise ValueError(f"Unknown subnetwork strategy: {subnetwork_strategy}")
+        if subnetwork_strategy == "atlas_rsn" and self.num_subnetworks != atlas.num_rsns:
+            raise ValueError(
+                "masking.num_subnetworks must match the atlas RSN count for atlas_rsn"
+            )
+        if not 2 <= self.num_subnetworks <= atlas.num_regions:
+            raise ValueError("num_subnetworks must be in [2, num_regions]")
+        self._fixed_subnetwork_ids = (
+            fixed_random_subnetworks(
+                atlas.num_regions, self.num_subnetworks, subnetwork_seed
+            )
+            if subnetwork_strategy == "fixed_random"
+            else None
+        )
+        self._community_cache: dict[int, torch.Tensor] = {}
         source_path = Path(source)
         if source_path.is_dir():
             self._subjects = [
@@ -232,6 +348,19 @@ class BrainGraphDataset(Dataset[Data]):
         else:
             raise ValueError(f"Unknown node feature type: {self.node_features}")
         graph.rsn_ids = self.atlas.rsn_ids.clone()
+        if self.subnetwork_strategy == "atlas_rsn":
+            graph.subnetwork_ids = graph.rsn_ids.clone()
+        elif self.subnetwork_strategy == "fixed_random":
+            graph.subnetwork_ids = self._fixed_subnetwork_ids.clone()
+        else:
+            if index not in self._community_cache:
+                self._community_cache[index] = fc_community_subnetworks(
+                    fc,
+                    self.num_subnetworks,
+                    method=self.community_method,
+                    seed=self.subnetwork_seed,
+                )
+            graph.subnetwork_ids = self._community_cache[index].clone()
         graph.region_ids = torch.arange(self.atlas.num_regions)
         return graph
 
@@ -240,13 +369,49 @@ class SyntheticBrainDataset(Dataset[Data]):
     """Deterministic synthetic graphs for smoke tests and development."""
 
     def __init__(
-        self, atlas: Atlas, num_subjects: int, feature_dim: int, *, top_k: int, seed: int
+        self,
+        atlas: Atlas,
+        num_subjects: int,
+        feature_dim: int,
+        *,
+        top_k: int,
+        seed: int,
+        subnetwork_strategy: SubnetworkStrategy = "atlas_rsn",
+        num_subnetworks: int | None = None,
+        subnetwork_seed: int = 42,
+        community_method: str = "fc_kmeans",
     ) -> None:
         self.atlas = atlas
         self.num_subjects = num_subjects
         self.feature_dim = feature_dim
         self.top_k = top_k
         self.seed = seed
+        self.subnetwork_strategy = subnetwork_strategy
+        self.num_subnetworks = (
+            atlas.num_rsns if num_subnetworks is None else num_subnetworks
+        )
+        self.subnetwork_seed = subnetwork_seed
+        self.community_method = community_method
+        if subnetwork_strategy not in (
+            "atlas_rsn",
+            "fixed_random",
+            "subject_communities",
+        ):
+            raise ValueError(f"Unknown subnetwork strategy: {subnetwork_strategy}")
+        if subnetwork_strategy == "atlas_rsn" and self.num_subnetworks != atlas.num_rsns:
+            raise ValueError(
+                "masking.num_subnetworks must match data.num_rsns for synthetic atlas_rsn"
+            )
+        if not 2 <= self.num_subnetworks <= atlas.num_regions:
+            raise ValueError("num_subnetworks must be in [2, num_regions]")
+        self._fixed_subnetwork_ids = (
+            fixed_random_subnetworks(
+                atlas.num_regions, self.num_subnetworks, subnetwork_seed
+            )
+            if subnetwork_strategy == "fixed_random"
+            else None
+        )
+        self._community_cache: dict[int, torch.Tensor] = {}
 
     def __len__(self) -> int:
         return self.num_subjects
@@ -262,13 +427,27 @@ class SyntheticBrainDataset(Dataset[Data]):
     def __getitem__(self, index: int) -> Data:
         generator = torch.Generator().manual_seed(self.seed + index)
         regions = self.atlas.num_regions
+        fc = pearson_correlation(torch.randn(regions, 100, generator=generator))
         graph = build_graph(
-            pearson_correlation(torch.randn(regions, 100, generator=generator)),
+            fc,
             strategy="top_k",
             top_k=self.top_k,
         )
         graph.x = torch.randn(regions, self.feature_dim, generator=generator)
         graph.rsn_ids = self.atlas.rsn_ids.clone()
+        if self.subnetwork_strategy == "atlas_rsn":
+            graph.subnetwork_ids = graph.rsn_ids.clone()
+        elif self.subnetwork_strategy == "fixed_random":
+            graph.subnetwork_ids = self._fixed_subnetwork_ids.clone()
+        else:
+            if index not in self._community_cache:
+                self._community_cache[index] = fc_community_subnetworks(
+                    fc,
+                    self.num_subnetworks,
+                    method=self.community_method,
+                    seed=self.subnetwork_seed,
+                )
+            graph.subnetwork_ids = self._community_cache[index].clone()
         graph.region_ids = torch.arange(regions)
         return graph
 

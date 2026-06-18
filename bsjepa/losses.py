@@ -110,21 +110,21 @@ def subject_specificity_diagnostics(
 
 
 @torch.no_grad()
-def per_rsn_prediction_losses(
+def per_subnetwork_prediction_losses(
     predictions: torch.Tensor,
     targets: torch.Tensor,
     row_group_ids: torch.Tensor,
-    group_rsn_ids: torch.Tensor,
+    group_subnetwork_ids: torch.Tensor,
     *,
     prediction_loss: PredictionLoss = "cosine",
 ) -> dict[int, tuple[float, int]]:
-    """Return prediction-loss sums and row counts for each target RSN."""
-    row_rsn_ids = group_rsn_ids[row_group_ids]
+    """Return prediction-loss sums and row counts for each target subnetwork."""
+    row_subnetwork_ids = group_subnetwork_ids[row_group_ids]
     row_losses = _prediction_row_losses(predictions, targets, prediction_loss)
     result: dict[int, tuple[float, int]] = {}
-    for rsn_id in row_rsn_ids.unique():
-        selected = row_losses[row_rsn_ids == rsn_id]
-        result[int(rsn_id.item())] = (selected.sum().item(), selected.numel())
+    for subnetwork_id in row_subnetwork_ids.unique():
+        selected = row_losses[row_subnetwork_ids == subnetwork_id]
+        result[int(subnetwork_id.item())] = (selected.sum().item(), selected.numel())
     return result
 
 
@@ -188,19 +188,31 @@ def jepa_loss(
     return total, metrics
 
 
-def rsn_diversity_loss(
+def subnetwork_diversity_loss(
     predictions: torch.Tensor,
     row_group_ids: torch.Tensor,
-    group_rsn_ids: torch.Tensor,
+    group_subnetwork_ids: torch.Tensor,
 ) -> torch.Tensor:
-    """Penalize aligned mean prediction directions across RSNs in a batch."""
+    """Penalize aligned mean prediction directions across aligned subnetworks."""
     pooled = torch.stack(
-        [predictions[row_group_ids == group].mean(0) for group in range(len(group_rsn_ids))]
+        [
+            predictions[row_group_ids == group].mean(0)
+            for group in range(len(group_subnetwork_ids))
+        ]
     )
-    rsn_means = torch.stack(
-        [pooled[group_rsn_ids == rsn].mean(0) for rsn in group_rsn_ids.unique()]
+    subnetwork_means = torch.stack(
+        [
+            pooled[group_subnetwork_ids == group].mean(0)
+            for group in group_subnetwork_ids.unique()
+        ]
     )
-    if rsn_means.shape[0] < 2:
+    if subnetwork_means.shape[0] < 2:
         return predictions.new_zeros(())
-    similarities = F.normalize(rsn_means, dim=-1) @ F.normalize(rsn_means, dim=-1).T
+    normalized = F.normalize(subnetwork_means, dim=-1)
+    similarities = normalized @ normalized.T
     return _off_diagonal(similarities).pow(2).mean()
+
+
+# Backward-compatible names for external atlas-RSN callers.
+per_rsn_prediction_losses = per_subnetwork_prediction_losses
+rsn_diversity_loss = subnetwork_diversity_loss

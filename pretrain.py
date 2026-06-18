@@ -65,6 +65,19 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     data_config = config["data"]
+    masking_config = config["masking"]
+    subnetwork_strategy = str(masking_config.get("strategy", "atlas_rsn"))
+    num_subnetworks = int(
+        masking_config.get("num_subnetworks", data_config["num_rsns"])
+    )
+    subnetwork_options = {
+        "subnetwork_strategy": subnetwork_strategy,
+        "num_subnetworks": num_subnetworks,
+        "subnetwork_seed": int(masking_config.get("random_seed", seed)),
+        "community_method": str(
+            masking_config.get("community_method", "fc_kmeans")
+        ),
+    }
     if data_config["source"] == "synthetic":
         atlas = synthetic_atlas(
             int(data_config["num_regions"]), int(data_config["num_rsns"])
@@ -75,6 +88,7 @@ def main() -> None:
             int(data_config["feature_dim"]),
             top_k=int(data_config["top_k"]),
             seed=seed,
+            **subnetwork_options,
         )
     else:
         atlas = load_atlas(data_config["atlas_csv"])
@@ -88,6 +102,7 @@ def main() -> None:
             graph_strategy=data_config["graph_strategy"],
             top_k=int(data_config["top_k"]),
             threshold=float(data_config["threshold"]),
+            **subnetwork_options,
         )
     evaluation_config = config.get("evaluation", {})
     evaluation_dataset = None
@@ -130,10 +145,11 @@ def main() -> None:
         **model_config,
     )
     collator = SubnetworkMaskCollator(
-        atlas.num_rsns, int(config["masking"]["num_targets"])
+        num_subnetworks, int(masking_config["num_targets"])
     )
     print(
         f"device={device} subjects={len(training_dataset)} regions={atlas.num_regions} "
+        f"subnetworks={num_subnetworks} strategy={subnetwork_strategy} "
         f"trainable_parameters={sum(p.numel() for p in model.parameters() if p.requires_grad)}"
     )
     history = pretrain(
@@ -149,6 +165,7 @@ def main() -> None:
         linear_probe_config=(
             linear_probe_config if linear_probe_dataset is not None else None
         ),
+        subnetwork_strategy=subnetwork_strategy,
     )
     if bool(config["training"].get("save_final_artifact", True)):
         from bsjepa.artifacts import export_final_artifact

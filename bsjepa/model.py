@@ -154,7 +154,7 @@ class BSJEPA(nn.Module):
         target_flags: list[torch.Tensor] = []
         target_embeddings: list[torch.Tensor] = []
         row_group_ids: list[torch.Tensor] = []
-        group_rsn_ids: list[torch.Tensor] = []
+        group_subnetwork_ids: list[torch.Tensor] = []
         prediction_subject_ids: list[torch.Tensor] = []
         prediction_region_ids: list[torch.Tensor] = []
         group_index = 0
@@ -187,7 +187,9 @@ class BSJEPA(nn.Module):
                     row_group_ids.append(
                         torch.full((count,), group_index, device=batch.x.device, dtype=torch.long)
                     )
-                    group_rsn_ids.append(masks.target_rsn_ids[subject, target_index])
+                    group_subnetwork_ids.append(
+                        masks.target_subnetwork_ids[subject, target_index]
+                    )
                     group_index += 1
                 if return_metadata:
                     count = int(is_target.sum())
@@ -208,7 +210,10 @@ class BSJEPA(nn.Module):
             context_embeddings,
         )
         if return_groups:
-            outputs += (torch.cat(row_group_ids), torch.stack(group_rsn_ids))
+            outputs += (
+                torch.cat(row_group_ids),
+                torch.stack(group_subnetwork_ids),
+            )
         if return_metadata:
             target_graph_embeddings = torch.stack(
                 [embeddings.mean(0) for embeddings in target_all]

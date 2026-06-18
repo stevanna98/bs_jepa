@@ -23,7 +23,11 @@ data:
   num_workers: 0
 
 masking:
+  strategy: atlas_rsn
+  num_subnetworks: 12
   num_targets: 2
+  random_seed: 42
+  community_method: fc_kmeans
 
 model:
   embed_dim: 64
