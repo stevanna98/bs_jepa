@@ -42,11 +42,11 @@ def _save_training_plots(
     plt.grid(alpha=0.3)
     _save_figure(path / "training_loss.png", dpi=dpi, save_pdf=save_pdf)
 
-    if any("similarity" in row for row in history):
+    if any("prediction_loss" in row for row in history):
         plt.figure(figsize=(7, 4))
-        plt.plot(epochs, [row.get("similarity", float("nan")) for row in history])
+        plt.plot(epochs, [row.get("prediction_loss", float("nan")) for row in history])
         plt.xlabel("Epoch")
-        plt.ylabel("Cosine prediction loss")
+        plt.ylabel("Prediction loss")
         plt.title("JEPA Prediction Loss")
         plt.grid(alpha=0.3)
         _save_figure(path / "prediction_loss.png", dpi=dpi, save_pdf=save_pdf)
@@ -61,7 +61,7 @@ def _save_training_plots(
             values = [row.get(key, float("nan")) for row in history]
             plt.plot(epochs, values, label=f"RSN {key.rsplit('_', 1)[1]}")
         plt.xlabel("Epoch")
-        plt.ylabel("Cosine prediction loss")
+        plt.ylabel("Prediction loss")
         plt.title("Per-RSN prediction loss")
         plt.grid(alpha=0.3)
         plt.legend(fontsize="small", ncol=2)

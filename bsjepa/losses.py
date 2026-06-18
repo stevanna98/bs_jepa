@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 import torch
 import torch.nn.functional as F
+
+PredictionLoss = Literal["cosine", "l2"]
 
 
 def _off_diagonal(matrix: torch.Tensor) -> torch.Tensor:
@@ -111,12 +115,12 @@ def per_rsn_prediction_losses(
     targets: torch.Tensor,
     row_group_ids: torch.Tensor,
     group_rsn_ids: torch.Tensor,
+    *,
+    prediction_loss: PredictionLoss = "cosine",
 ) -> dict[int, tuple[float, int]]:
-    """Return cosine prediction-loss sums and row counts for each target RSN."""
+    """Return prediction-loss sums and row counts for each target RSN."""
     row_rsn_ids = group_rsn_ids[row_group_ids]
-    row_losses = 2 - 2 * (
-        F.normalize(predictions, dim=-1) * F.normalize(targets, dim=-1)
-    ).sum(-1)
+    row_losses = _prediction_row_losses(predictions, targets, prediction_loss)
     result: dict[int, tuple[float, int]] = {}
     for rsn_id in row_rsn_ids.unique():
         selected = row_losses[row_rsn_ids == rsn_id]
@@ -124,20 +128,40 @@ def per_rsn_prediction_losses(
     return result
 
 
+def _prediction_row_losses(
+    predictions: torch.Tensor,
+    targets: torch.Tensor,
+    prediction_loss: PredictionLoss,
+) -> torch.Tensor:
+    if prediction_loss == "cosine":
+        return 2 - 2 * (
+            F.normalize(predictions, dim=-1) * F.normalize(targets, dim=-1)
+        ).sum(-1)
+    if prediction_loss == "l2":
+        return (predictions - targets).pow(2).sum(-1).clamp_min(1e-12).sqrt()
+    raise ValueError(f"Unknown prediction loss: {prediction_loss}")
+
+
 def jepa_loss(
     predictions: torch.Tensor,
     targets: torch.Tensor,
     context: torch.Tensor,
     *,
+    prediction_loss: PredictionLoss = "cosine",
     prediction_variance_weight: float,
     context_variance_weight: float,
     covariance_weight: float,
     target_std: float,
 ) -> tuple[torch.Tensor, dict[str, float]]:
-    """Cosine prediction loss with VICReg-style anti-collapse terms."""
-    similarity = 2 - 2 * (
-        F.normalize(predictions, dim=-1) * F.normalize(targets, dim=-1)
-    ).sum(-1).mean()
+    """Prediction loss with VICReg-style anti-collapse terms."""
+    cosine_loss = _prediction_row_losses(predictions, targets, "cosine").mean()
+    l2_loss = _prediction_row_losses(predictions, targets, "l2").mean()
+    if prediction_loss == "cosine":
+        prediction_term = cosine_loss
+    elif prediction_loss == "l2":
+        prediction_term = l2_loss
+    else:
+        raise ValueError(f"Unknown prediction loss: {prediction_loss}")
     prediction_variance = F.relu(
         target_std - predictions.std(0, unbiased=False)
     ).mean()
@@ -145,14 +169,17 @@ def jepa_loss(
     centered = context - context.mean(0)
     covariance = centered.T @ centered / max(context.shape[0] - 1, 1)
     covariance_penalty = _off_diagonal(covariance).pow(2).sum() / context.shape[1]
-    total = (
-        similarity
-        + prediction_variance_weight * prediction_variance
-        + context_variance_weight * context_variance
-        + covariance_weight * covariance_penalty
-    )
+    # total = (
+    #     prediction_term
+    #     + prediction_variance_weight * prediction_variance
+    #     + context_variance_weight * context_variance
+    #     + covariance_weight * covariance_penalty
+    # )
+    total = prediction_term
     metrics = {
-        "similarity": similarity.item(),
+        "prediction_loss": prediction_term.item(),
+        "similarity": cosine_loss.item(),
+        "prediction_l2": l2_loss.item(),
         "prediction_variance": prediction_variance.item(),
         "context_variance": context_variance.item(),
         "context_covariance": covariance_penalty.item(),

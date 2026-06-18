@@ -78,6 +78,7 @@ def pretrain(
     output_path.mkdir(parents=True, exist_ok=True)
     checkpoint_frequency = int(config.get("checkpoint_frequency", 1))
     diversity_weight = float(config.get("rsn_diversity_weight", 0.0))
+    prediction_loss = str(config.get("prediction_loss", "cosine"))
     save_plots = bool(config.get("save_plots", True))
     plot_frequency = int(config.get("plot_frequency", 1))
     collapse_metrics = bool(config.get("collapse_metrics", True))
@@ -124,6 +125,7 @@ def pretrain(
                 predictions,
                 targets,
                 context,
+                prediction_loss=prediction_loss,
                 prediction_variance_weight=float(config["prediction_variance_weight"]),
                 context_variance_weight=float(config["context_variance_weight"]),
                 covariance_weight=float(config["covariance_weight"]),
@@ -144,7 +146,11 @@ def pretrain(
                     )
                 )
             rsn_losses = per_rsn_prediction_losses(
-                predictions, targets, row_group_ids, group_rsn_ids
+                predictions,
+                targets,
+                row_group_ids,
+                group_rsn_ids,
+                prediction_loss=prediction_loss,
             )
             for rsn_id, (loss_sum, row_count) in rsn_losses.items():
                 rsn_loss_sums[rsn_id] = rsn_loss_sums.get(rsn_id, 0.0) + loss_sum

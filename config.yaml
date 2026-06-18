@@ -52,6 +52,7 @@ training:
   ema_start: 0.999
   ema_end: 1.0
   clip_grad: 1.0
+  prediction_loss: l2
   prediction_variance_weight: 0.5
   context_variance_weight: 1.0
   covariance_weight: 0.1
