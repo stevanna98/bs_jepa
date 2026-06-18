@@ -1,0 +1,57 @@
+seed: 42
+output_dir: /content/drive/MyDrive/IMPERIAL/bs_jepa/
+
+data:
+  # Use "synthetic", a subject dictionary (.pkl/.pt), or a directory of .pt/.npz files.
+  source: /content/drive/MyDrive/IMPERIAL/data/subject_data_1_cleaned_precise_age.pkl
+  atlas_csv: /content/drive/MyDrive/IMPERIAL/data/glasser379_to_rsn12.csv
+  num_subjects: 16
+  num_regions: 40
+  num_rsns: 8
+  node_features: bold
+  feature_dim: 32
+  bold_key: BOLD
+  fc_key: FC
+  transpose_bold: false
+  graph_strategy: top_k
+  top_k: 8
+  threshold: 0.2
+  batch_size: 16
+  num_workers: 0
+
+masking:
+  num_targets: 7
+
+model:
+  embed_dim: 64
+  feature_mode: passthrough
+  feature_dim: 32
+  encoder_type: gat
+  encoder_hidden: 64
+  encoder_layers: 2
+  encoder_heads: 4
+  encoder_dropout: 0.1
+  predictor_type: gat
+  predictor_hidden: 64
+  predictor_layers: 2
+  predictor_heads: 4
+  predictor_dropout: 0.1
+  region_positional_encoding: true
+
+training:
+  epochs: 2
+  lr: 0.0001
+  start_lr: 0.000001
+  final_lr: 0.000001
+  warmup_epochs: 0
+  weight_decay_start: 0.04
+  weight_decay_end: 0.4
+  ema_start: 0.996
+  ema_end: 1.0
+  clip_grad: 1.0
+  prediction_variance_weight: 0.5
+  context_variance_weight: 1.0
+  covariance_weight: 0.1
+  target_std: 0.1
+  rsn_diversity_weight: 0.05
+  checkpoint_frequency: 1
