@@ -1,10 +1,10 @@
 seed: 42
-output_dir: outputs/
+output_dir: /content/drive/MyDrive/IMPERIAL/bs_jepa/
 
 data:
   # Use "synthetic", a subject dictionary (.pkl/.pt), or a directory of .pt/.npz files.
-  source: synthetic
-  atlas_csv:
+  source: /content/drive/MyDrive/IMPERIAL/data/subject_data_1_cleaned_precise_age.pkl
+  atlas_csv: /content/drive/MyDrive/IMPERIAL/data/glasser379_to_rsn12.csv
   num_subjects: 16
   num_regions: 40
   num_rsns: 8
@@ -24,7 +24,7 @@ masking:
 
 model:
   embed_dim: 64
-  feature_mode: passthrough
+  feature_mode: conv1d
   feature_dim: 32
   encoder_type: gat
   encoder_hidden: 64
