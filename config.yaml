@@ -20,7 +20,7 @@ data:
   num_workers: 0
 
 masking:
-  num_targets: 7
+  num_targets: 11
 
 model:
   embed_dim: 64
@@ -31,7 +31,7 @@ model:
   encoder_layers: 2
   encoder_heads: 4
   encoder_dropout: 0.1
-  predictor_type: gat
+  predictor_type: gcn
   predictor_hidden: 8
   predictor_layers: 1
   predictor_heads: 2
@@ -46,7 +46,7 @@ training:
   warmup_epochs: 0
   weight_decay_start: 0.04
   weight_decay_end: 0.4
-  ema_start: 0.996
+  ema_start: 0.999
   ema_end: 1.0
   clip_grad: 1.0
   prediction_variance_weight: 0.5
