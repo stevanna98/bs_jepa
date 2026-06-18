@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import copy
-from typing import Any, Literal
+from typing import Literal
 
 import torch
 import torch.nn as nn
@@ -16,9 +16,6 @@ from .masking import MaskOutput, extract_subgraph
 
 GraphLayer = Literal["gcn", "gat"]
 FeatureMode = Literal["passthrough", "conv1d"]
-PositionalEncodingType = Literal[
-    "none", "learned_region", "fixed_gradient", "subject_gradient"
-]
 
 
 class TemporalConv(nn.Module):
@@ -41,99 +38,6 @@ class TemporalConv(nn.Module):
         return self.projection(pooled)
 
 
-def resolve_positional_encoding_config(
-    positional_encoding: dict[str, Any] | None,
-    region_positional_encoding: bool | None,
-) -> dict[str, Any]:
-    """Resolve the new positional config while preserving the old boolean API."""
-    if positional_encoding is None:
-        encoding_type = "none" if region_positional_encoding is False else "learned_region"
-        return {"type": encoding_type}
-    resolved = dict(positional_encoding)
-    resolved.setdefault("type", "learned_region")
-    if resolved["type"] not in (
-        "none",
-        "learned_region",
-        "fixed_gradient",
-        "subject_gradient",
-    ):
-        raise ValueError(f"Unknown positional encoding type: {resolved['type']}")
-    return resolved
-
-
-class PositionalEncoder(nn.Module):
-    """Generate positional terms from region IDs or gradient coordinates."""
-
-    def __init__(
-        self,
-        hidden_channels: int,
-        num_regions: int | None,
-        config: dict[str, Any],
-        fixed_gradient_features: torch.Tensor | None,
-    ) -> None:
-        super().__init__()
-        self.encoding_type: PositionalEncodingType = config["type"]
-        self.region_embedding: nn.Embedding | None = None
-        self.gradient_projection: nn.Linear | None = None
-        if self.encoding_type == "none":
-            return
-        if self.encoding_type == "learned_region":
-            if num_regions is None:
-                raise ValueError("learned_region encoding requires num_regions")
-            self.region_embedding = nn.Embedding(num_regions, hidden_channels)
-            return
-        gradient_dim = config.get("gradient_dim")
-        if fixed_gradient_features is not None:
-            if fixed_gradient_features.ndim != 2:
-                raise ValueError("Fixed gradient features must be a matrix")
-            if num_regions is not None and fixed_gradient_features.shape[0] != num_regions:
-                raise ValueError("Fixed gradient rows must match num_regions")
-            gradient_dim = fixed_gradient_features.shape[1]
-        if gradient_dim is None or int(gradient_dim) < 1:
-            raise ValueError(
-                f"{self.encoding_type} encoding requires a positive gradient_dim"
-            )
-        self.gradient_projection = nn.Linear(
-            int(gradient_dim), hidden_channels, bias=False
-        )
-        if not bool(config.get("trainable_projection", True)):
-            self.gradient_projection.requires_grad_(False)
-        if self.encoding_type == "fixed_gradient":
-            if num_regions is None:
-                raise ValueError("fixed_gradient encoding requires num_regions")
-            features = (
-                fixed_gradient_features.detach().clone().float()
-                if fixed_gradient_features is not None
-                else torch.zeros(num_regions, int(gradient_dim))
-            )
-            if bool(config.get("trainable_coordinates", False)):
-                self.fixed_gradient_features = nn.Parameter(features)
-            else:
-                self.register_buffer("fixed_gradient_features", features)
-
-    def forward(self, data: Data) -> torch.Tensor | None:
-        if self.encoding_type == "none":
-            return None
-        if self.encoding_type == "subject_gradient":
-            features = getattr(data, "positional_features", None)
-            if features is None:
-                raise ValueError(
-                    "subject_gradient encoding requires graph.positional_features"
-                )
-        else:
-            region_ids = getattr(data, "region_ids", None)
-            if region_ids is None:
-                region_ids = torch.arange(data.num_nodes, device=data.x.device)
-            if self.encoding_type == "learned_region":
-                return self.region_embedding(region_ids)
-            features = self.fixed_gradient_features[region_ids]
-        if features.ndim != 2 or features.shape[0] != data.num_nodes:
-            raise ValueError("Positional features must have one row per graph node")
-        if features.shape[1] != self.gradient_projection.in_features:
-            raise ValueError("Positional feature dimension does not match gradient_dim")
-        return self.gradient_projection(features.float())
-
-
 class GraphNetwork(nn.Module):
     """GCN/GATv2 node network used as either encoder or predictor."""
 
@@ -150,8 +54,6 @@ class GraphNetwork(nn.Module):
         num_regions: int | None,
         feature_mode: FeatureMode = "passthrough",
         feature_dim: int = 64,
-        positional_encoding: dict[str, Any] | None = None,
-        fixed_gradient_features: torch.Tensor | None = None,
     ) -> None:
         super().__init__()
         if num_layers < 1:
@@ -167,11 +69,8 @@ class GraphNetwork(nn.Module):
         )
         projection_input = feature_dim if self.feature_extractor else in_channels
         self.input_projection = nn.Linear(projection_input, hidden_channels)
-        self.positional_encoder = PositionalEncoder(
-            hidden_channels,
-            num_regions,
-            positional_encoding or {"type": "none"},
-            fixed_gradient_features,
+        self.region_embedding = (
+            nn.Embedding(num_regions, hidden_channels) if num_regions is not None else None
         )
 
         dimensions = [hidden_channels] * num_layers + [out_channels]
@@ -195,9 +94,11 @@ class GraphNetwork(nn.Module):
     def forward(self, data: Data) -> torch.Tensor:
         x = self.feature_extractor(data.x) if self.feature_extractor else data.x
         x = self.input_projection(x)
-        positional_term = self.positional_encoder(data)
-        if positional_term is not None:
-            x = x + positional_term
+        if self.region_embedding is not None:
+            region_ids = getattr(data, "region_ids", None)
+            if region_ids is None:
+                region_ids = torch.arange(data.num_nodes, device=x.device)
+            x = x + self.region_embedding(region_ids)
 
         edge_weight = data.edge_attr.squeeze(-1) if data.edge_attr is not None else None
         for index, (layer, norm) in enumerate(zip(self.layers, self.norms, strict=True)):
@@ -230,12 +131,7 @@ class BSJEPA(nn.Module):
         return self
 
     def forward(
-        self,
-        batch: Batch,
-        masks: MaskOutput,
-        *,
-        return_groups: bool = False,
-        return_metadata: bool = False,
+        self, batch: Batch, masks: MaskOutput, *, return_groups: bool = False
     ) -> tuple[torch.Tensor, ...]:
         graphs = batch.to_data_list()
         with torch.no_grad():
@@ -253,9 +149,7 @@ class BSJEPA(nn.Module):
         target_flags: list[torch.Tensor] = []
         target_embeddings: list[torch.Tensor] = []
         row_group_ids: list[torch.Tensor] = []
-        group_subnetwork_ids: list[torch.Tensor] = []
-        prediction_subject_ids: list[torch.Tensor] = []
-        prediction_region_ids: list[torch.Tensor] = []
+        group_rsn_ids: list[torch.Tensor] = []
         group_index = 0
 
         for subject, graph in enumerate(graphs):
@@ -276,8 +170,6 @@ class BSJEPA(nn.Module):
                     edge_attr=graph.edge_attr,
                     num_nodes=graph.num_nodes,
                 )
-                if hasattr(graph, "positional_features"):
-                    reconnected.positional_features = graph.positional_features
                 subgraph = extract_subgraph(reconnected, context_mask | target_mask)
                 is_target = target_mask[subgraph.region_ids]
                 predictor_graphs.append(subgraph)
@@ -288,18 +180,8 @@ class BSJEPA(nn.Module):
                     row_group_ids.append(
                         torch.full((count,), group_index, device=batch.x.device, dtype=torch.long)
                     )
-                    group_subnetwork_ids.append(
-                        masks.target_subnetwork_ids[subject, target_index]
-                    )
+                    group_rsn_ids.append(masks.target_rsn_ids[subject, target_index])
                     group_index += 1
-                if return_metadata:
-                    count = int(is_target.sum())
-                    prediction_subject_ids.append(
-                        torch.full(
-                            (count,), subject, device=batch.x.device, dtype=torch.long
-                        )
-                    )
-                    prediction_region_ids.append(subgraph.region_ids[is_target])
 
         if not predictor_graphs:
             raise RuntimeError("No target nodes were found; check the atlas RSN mapping")
@@ -311,20 +193,7 @@ class BSJEPA(nn.Module):
             context_embeddings,
         )
         if return_groups:
-            outputs += (
-                torch.cat(row_group_ids),
-                torch.stack(group_subnetwork_ids),
-            )
-        if return_metadata:
-            target_graph_embeddings = torch.stack(
-                [embeddings.mean(0) for embeddings in target_all]
-            )
-            outputs += (
-                torch.cat(prediction_subject_ids),
-                torch.cat(prediction_region_ids),
-                context_batch.batch,
-                target_graph_embeddings,
-            )
+            outputs += (torch.cat(row_group_ids), torch.stack(group_rsn_ids))
         return outputs
 
     @torch.no_grad()
@@ -349,28 +218,18 @@ def build_bsjepa(
     predictor_layers: int = 2,
     predictor_heads: int = 4,
     predictor_dropout: float = 0.0,
-    region_positional_encoding: bool | None = None,
-    positional_encoding: dict[str, Any] | None = None,
-    fixed_gradient_features: torch.Tensor | None = None,
+    region_positional_encoding: bool = True,
 ) -> BSJEPA:
     """Build a BS-JEPA model from explicit hyperparameters."""
-    positional_config = resolve_positional_encoding_config(
-        positional_encoding, region_positional_encoding
-    )
+    positional_regions = num_regions if region_positional_encoding else None
     encoder = GraphNetwork(
         in_channels, encoder_hidden, embed_dim, kind=encoder_type,
         num_layers=encoder_layers, heads=encoder_heads, dropout=encoder_dropout,
-        num_regions=num_regions,
-        feature_mode=feature_mode,
-        feature_dim=feature_dim,
-        positional_encoding=positional_config,
-        fixed_gradient_features=fixed_gradient_features,
+        num_regions=positional_regions, feature_mode=feature_mode, feature_dim=feature_dim,
     )
     predictor = GraphNetwork(
         embed_dim, predictor_hidden, embed_dim, kind=predictor_type,
         num_layers=predictor_layers, heads=predictor_heads, dropout=predictor_dropout,
-        num_regions=num_regions,
-        positional_encoding=positional_config,
-        fixed_gradient_features=fixed_gradient_features,
+        num_regions=positional_regions,
     )
     return BSJEPA(encoder, predictor, embed_dim)

@@ -22,13 +22,12 @@ from bsjepa import (
     pretrain,
     split_pmat_holdout,
 )
-from bsjepa.data import load_gradient_features, synthetic_atlas
+from bsjepa.data import synthetic_atlas
 from bsjepa.linear_probe import split_gender_probe_holdout
-from bsjepa.model import resolve_positional_encoding_config
 
 
-def parse_args(description: str = "Pretrain BS-JEPA") -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=description)
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Pretrain BS-JEPA")
     parser.add_argument("--config", type=Path, default=Path(__file__).with_name("config.yaml"))
     parser.add_argument(
         "--set", action="append", default=[], metavar="SECTION.KEY=VALUE",
@@ -44,15 +43,15 @@ def load_config(path: Path, overrides: list[str]) -> dict[str, Any]:
         key, separator, raw_value = override.partition("=")
         if not separator:
             raise ValueError(f"Invalid override: {override!r}")
-        fields = key.split(".")
-        target = config
-        for field in fields[:-1]:
-            if field not in target or not isinstance(target[field], dict):
+        if "." not in key:
+            if key not in config:
                 raise KeyError(f"Unknown config key: {key}")
-            target = target[field]
-        if fields[-1] not in target:
+            config[key] = yaml.safe_load(raw_value)
+            continue
+        section, field = key.split(".", 1)
+        if section not in config or field not in config[section]:
             raise KeyError(f"Unknown config key: {key}")
-        target[fields[-1]] = yaml.safe_load(raw_value)
+        config[section][field] = yaml.safe_load(raw_value)
     return config
 
 
@@ -66,19 +65,6 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     data_config = config["data"]
-    masking_config = config["masking"]
-    subnetwork_strategy = str(masking_config.get("strategy", "atlas_rsn"))
-    num_subnetworks = int(
-        masking_config.get("num_subnetworks", data_config["num_rsns"])
-    )
-    subnetwork_options = {
-        "subnetwork_strategy": subnetwork_strategy,
-        "num_subnetworks": num_subnetworks,
-        "subnetwork_seed": int(masking_config.get("random_seed", seed)),
-        "community_method": str(
-            masking_config.get("community_method", "fc_kmeans")
-        ),
-    }
     if data_config["source"] == "synthetic":
         atlas = synthetic_atlas(
             int(data_config["num_regions"]), int(data_config["num_rsns"])
@@ -89,7 +75,6 @@ def main() -> None:
             int(data_config["feature_dim"]),
             top_k=int(data_config["top_k"]),
             seed=seed,
-            **subnetwork_options,
         )
     else:
         atlas = load_atlas(data_config["atlas_csv"])
@@ -103,8 +88,6 @@ def main() -> None:
             graph_strategy=data_config["graph_strategy"],
             top_k=int(data_config["top_k"]),
             threshold=float(data_config["threshold"]),
-            gradient_key=data_config.get("gradient_key"),
-            **subnetwork_options,
         )
     evaluation_config = config.get("evaluation", {})
     evaluation_dataset = None
@@ -141,47 +124,16 @@ def main() -> None:
     model_config = dict(config["model"])
     if data_config["source"] == "synthetic":
         model_config["feature_mode"] = "passthrough"
-    positional_config = resolve_positional_encoding_config(
-        model_config.get("positional_encoding"),
-        model_config.get("region_positional_encoding"),
-    )
-    positional_type = positional_config["type"]
-    fixed_gradient_features = None
-    if positional_type == "fixed_gradient":
-        gradient_file = positional_config.get("gradient_file")
-        if not gradient_file:
-            raise ValueError(
-                "model.positional_encoding.gradient_file is required for fixed_gradient"
-            )
-        fixed_gradient_features = load_gradient_features(
-            gradient_file,
-            atlas.num_regions,
-            gradient_columns=positional_config.get("gradient_columns"),
-            region_column=positional_config.get("region_column"),
-        )
-        positional_config["gradient_dim"] = fixed_gradient_features.shape[1]
-    elif positional_type == "subject_gradient":
-        positional_features = getattr(sample, "positional_features", None)
-        if positional_features is None:
-            raise ValueError(
-                "subject_gradient requires data.gradient_key and precomputed gradients "
-                "in every subject record"
-            )
-        positional_config["gradient_dim"] = positional_features.shape[1]
-    model_config["positional_encoding"] = positional_config
     model = build_bsjepa(
         in_channels=sample.x.shape[1],
         num_regions=atlas.num_regions,
-        fixed_gradient_features=fixed_gradient_features,
         **model_config,
     )
     collator = SubnetworkMaskCollator(
-        num_subnetworks, int(masking_config["num_targets"])
+        atlas.num_rsns, int(config["masking"]["num_targets"])
     )
     print(
         f"device={device} subjects={len(training_dataset)} regions={atlas.num_regions} "
-        f"subnetworks={num_subnetworks} strategy={subnetwork_strategy} "
-        f"positional_encoding={positional_type} "
         f"trainable_parameters={sum(p.numel() for p in model.parameters() if p.requires_grad)}"
     )
     history = pretrain(
@@ -197,7 +149,6 @@ def main() -> None:
         linear_probe_config=(
             linear_probe_config if linear_probe_dataset is not None else None
         ),
-        subnetwork_strategy=subnetwork_strategy,
     )
     if bool(config["training"].get("save_final_artifact", True)):
         from bsjepa.artifacts import export_final_artifact

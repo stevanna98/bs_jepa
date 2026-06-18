@@ -42,45 +42,32 @@ def _save_training_plots(
     plt.grid(alpha=0.3)
     _save_figure(path / "training_loss.png", dpi=dpi, save_pdf=save_pdf)
 
-    if any("prediction_loss" in row for row in history):
+    if any("similarity" in row for row in history):
         plt.figure(figsize=(7, 4))
-        plt.plot(epochs, [row.get("prediction_loss", float("nan")) for row in history])
+        plt.plot(epochs, [row.get("similarity", float("nan")) for row in history])
         plt.xlabel("Epoch")
-        plt.ylabel("Prediction loss")
+        plt.ylabel("Cosine prediction loss")
         plt.title("JEPA Prediction Loss")
         plt.grid(alpha=0.3)
         _save_figure(path / "prediction_loss.png", dpi=dpi, save_pdf=save_pdf)
 
-    loss_group_options = (
-        ("rsn_loss_", "RSN", "rsn_prediction_losses.png"),
-        ("subnetwork_loss_", "Subnetwork", "subnetwork_prediction_losses.png"),
-        (
-            "community_index_loss_",
-            "Unaligned community index",
-            "subnetwork_prediction_losses.png",
-        ),
+    rsn_keys = sorted(
+        {key for row in history for key in row if key.startswith("rsn_loss_")},
+        key=lambda key: int(key.rsplit("_", 1)[1]),
     )
-    for prefix, group_label, filename in loss_group_options:
-        group_keys = sorted(
-            {key for row in history for key in row if key.startswith(prefix)},
-            key=lambda key: int(key.rsplit("_", 1)[1]),
-        )
-        if not group_keys:
-            continue
+    if rsn_keys:
         plt.figure(figsize=(8, 5))
-        for key in group_keys:
+        for key in rsn_keys:
             values = [row.get(key, float("nan")) for row in history]
-            plt.plot(
-                epochs,
-                values,
-                label=f"{group_label} {key.rsplit('_', 1)[1]}",
-            )
+            plt.plot(epochs, values, label=f"RSN {key.rsplit('_', 1)[1]}")
         plt.xlabel("Epoch")
-        plt.ylabel("Prediction loss")
-        plt.title(f"Per-{group_label} Prediction Loss")
+        plt.ylabel("Cosine prediction loss")
+        plt.title("Per-RSN prediction loss")
         plt.grid(alpha=0.3)
         plt.legend(fontsize="small", ncol=2)
-        _save_figure(path / filename, dpi=dpi, save_pdf=save_pdf)
+        _save_figure(
+            path / "rsn_prediction_losses.png", dpi=dpi, save_pdf=save_pdf
+        )
 
     collapse_groups = {
         "anti_collapse_losses.png": [
@@ -89,7 +76,6 @@ def _save_training_plots(
             "context_covariance",
             "target_std",
             "rsn_diversity",
-            "subnetwork_diversity",
         ],
         "embedding_standard_deviations.png": [
             "context_embedding_std",
@@ -108,20 +94,6 @@ def _save_training_plots(
             "target_norm_std",
             "prediction_norm_mean",
             "prediction_norm_std",
-        ],
-        "region_subject_specificity.png": [
-            "prediction_same_region_across_subject_cosine",
-            "prediction_across_region_within_subject_cosine",
-        ],
-        "subject_graph_embedding_variance.png": [
-            "context_graph_embedding_subject_std",
-            "target_graph_embedding_subject_std",
-            "prediction_graph_embedding_subject_std",
-        ],
-        "subject_graph_embedding_similarity.png": [
-            "context_graph_embedding_subject_pairwise_cosine",
-            "target_graph_embedding_subject_pairwise_cosine",
-            "prediction_graph_embedding_subject_pairwise_cosine",
         ],
     }
     for filename, keys in collapse_groups.items():
@@ -223,48 +195,3 @@ def save_training_plots(
         _save_training_plots(
             history, plot_dir, dpi=dpi, save_pdf=save_pdf
         )
-
-
-def save_downstream_plots(
-    history: list[dict[str, float]],
-    plot_dir: str | Path,
-    *,
-    dpi: int = 150,
-) -> None:
-    """Save headless loss and classification curves for end-to-end training."""
-    if not history:
-        return
-    path = Path(plot_dir)
-    path.mkdir(parents=True, exist_ok=True)
-    epochs = [row["epoch"] for row in history]
-    style = {"lines.linewidth": 1.8, "figure.facecolor": "white"}
-    with matplotlib.rc_context(style):
-        plt.figure(figsize=(8, 5))
-        for key, label in (
-            ("total_loss", "Total loss"),
-            ("jepa_l2_loss", "JEPA L2 loss"),
-            ("classification_ce_loss", "Training CE"),
-            ("val_ce_loss", "Validation CE"),
-        ):
-            plt.plot(epochs, [row[key] for row in history], label=label)
-        plt.xlabel("Epoch")
-        plt.ylabel("Loss")
-        plt.title("End-to-End Gender Training Losses")
-        plt.grid(alpha=0.3)
-        plt.legend()
-        _save_figure(path / "downstream_losses.png", dpi=dpi, save_pdf=False)
-
-        plt.figure(figsize=(8, 5))
-        for key, label in (
-            ("train_accuracy", "Training accuracy"),
-            ("val_accuracy", "Validation accuracy"),
-            ("val_balanced_accuracy", "Validation balanced accuracy"),
-        ):
-            plt.plot(epochs, [row[key] for row in history], label=label)
-        plt.xlabel("Epoch")
-        plt.ylabel("Score")
-        plt.ylim(0, 1)
-        plt.title("End-to-End Gender Classification")
-        plt.grid(alpha=0.3)
-        plt.legend()
-        _save_figure(path / "downstream_accuracy.png", dpi=dpi, save_pdf=False)

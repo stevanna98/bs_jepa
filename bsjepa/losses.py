@@ -2,12 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Literal
-
 import torch
 import torch.nn.functional as F
-
-PredictionLoss = Literal["cosine", "l2"]
 
 
 def _off_diagonal(matrix: torch.Tensor) -> torch.Tensor:
@@ -48,98 +44,23 @@ def representation_diagnostics(
     return metrics
 
 
-def _mean_pool_by_group(
-    embeddings: torch.Tensor, group_ids: torch.Tensor
-) -> torch.Tensor:
-    return torch.stack(
-        [embeddings[group_ids == group].mean(0) for group in group_ids.unique()]
-    )
-
-
-def _mean_group_pairwise_cosine(
-    embeddings: torch.Tensor,
-    outer_group_ids: torch.Tensor,
-    inner_group_ids: torch.Tensor,
-) -> float:
-    similarities: list[float] = []
-    for outer_group in outer_group_ids.unique():
-        selected = outer_group_ids == outer_group
-        inner_groups = inner_group_ids[selected]
-        if inner_groups.unique().numel() < 2:
-            continue
-        pooled = _mean_pool_by_group(embeddings[selected], inner_groups)
-        similarities.append(_mean_pairwise_cosine(pooled))
-    return sum(similarities) / len(similarities) if similarities else float("nan")
-
-
 @torch.no_grad()
-def subject_specificity_diagnostics(
-    predictions: torch.Tensor,
-    prediction_subject_ids: torch.Tensor,
-    prediction_region_ids: torch.Tensor,
-    context: torch.Tensor,
-    context_subject_ids: torch.Tensor,
-    target_graph_embeddings: torch.Tensor,
-) -> dict[str, float]:
-    """Measure whether embeddings vary by subject rather than only by region."""
-    metrics = {
-        "prediction_same_region_across_subject_cosine": _mean_group_pairwise_cosine(
-            predictions, prediction_region_ids, prediction_subject_ids
-        ),
-        "prediction_across_region_within_subject_cosine": _mean_group_pairwise_cosine(
-            predictions, prediction_subject_ids, prediction_region_ids
-        ),
-    }
-    graph_embeddings = {
-        "context": _mean_pool_by_group(context, context_subject_ids),
-        "target": target_graph_embeddings,
-        "prediction": _mean_pool_by_group(predictions, prediction_subject_ids),
-    }
-    for name, embeddings in graph_embeddings.items():
-        if embeddings.shape[0] < 2:
-            metrics[f"{name}_graph_embedding_subject_std"] = float("nan")
-            metrics[f"{name}_graph_embedding_subject_pairwise_cosine"] = float("nan")
-            continue
-        metrics[f"{name}_graph_embedding_subject_std"] = embeddings.std(
-            0, unbiased=False
-        ).mean().item()
-        metrics[f"{name}_graph_embedding_subject_pairwise_cosine"] = (
-            _mean_pairwise_cosine(embeddings)
-        )
-    return metrics
-
-
-@torch.no_grad()
-def per_subnetwork_prediction_losses(
+def per_rsn_prediction_losses(
     predictions: torch.Tensor,
     targets: torch.Tensor,
     row_group_ids: torch.Tensor,
-    group_subnetwork_ids: torch.Tensor,
-    *,
-    prediction_loss: PredictionLoss = "cosine",
+    group_rsn_ids: torch.Tensor,
 ) -> dict[int, tuple[float, int]]:
-    """Return prediction-loss sums and row counts for each target subnetwork."""
-    row_subnetwork_ids = group_subnetwork_ids[row_group_ids]
-    row_losses = _prediction_row_losses(predictions, targets, prediction_loss)
+    """Return cosine prediction-loss sums and row counts for each target RSN."""
+    row_rsn_ids = group_rsn_ids[row_group_ids]
+    row_losses = 2 - 2 * (
+        F.normalize(predictions, dim=-1) * F.normalize(targets, dim=-1)
+    ).sum(-1)
     result: dict[int, tuple[float, int]] = {}
-    for subnetwork_id in row_subnetwork_ids.unique():
-        selected = row_losses[row_subnetwork_ids == subnetwork_id]
-        result[int(subnetwork_id.item())] = (selected.sum().item(), selected.numel())
+    for rsn_id in row_rsn_ids.unique():
+        selected = row_losses[row_rsn_ids == rsn_id]
+        result[int(rsn_id.item())] = (selected.sum().item(), selected.numel())
     return result
-
-
-def _prediction_row_losses(
-    predictions: torch.Tensor,
-    targets: torch.Tensor,
-    prediction_loss: PredictionLoss,
-) -> torch.Tensor:
-    if prediction_loss == "cosine":
-        return 2 - 2 * (
-            F.normalize(predictions, dim=-1) * F.normalize(targets, dim=-1)
-        ).sum(-1)
-    if prediction_loss == "l2":
-        return (predictions - targets).pow(2).sum(-1).clamp_min(1e-12).sqrt()
-    raise ValueError(f"Unknown prediction loss: {prediction_loss}")
 
 
 def jepa_loss(
@@ -147,21 +68,15 @@ def jepa_loss(
     targets: torch.Tensor,
     context: torch.Tensor,
     *,
-    prediction_loss: PredictionLoss = "cosine",
     prediction_variance_weight: float,
     context_variance_weight: float,
     covariance_weight: float,
     target_std: float,
 ) -> tuple[torch.Tensor, dict[str, float]]:
-    """Prediction loss with VICReg-style anti-collapse terms."""
-    cosine_loss = _prediction_row_losses(predictions, targets, "cosine").mean()
-    l2_loss = _prediction_row_losses(predictions, targets, "l2").mean()
-    if prediction_loss == "cosine":
-        prediction_term = cosine_loss
-    elif prediction_loss == "l2":
-        prediction_term = l2_loss
-    else:
-        raise ValueError(f"Unknown prediction loss: {prediction_loss}")
+    """Cosine prediction loss with VICReg-style anti-collapse terms."""
+    similarity = 2 - 2 * (
+        F.normalize(predictions, dim=-1) * F.normalize(targets, dim=-1)
+    ).sum(-1).mean()
     prediction_variance = F.relu(
         target_std - predictions.std(0, unbiased=False)
     ).mean()
@@ -170,16 +85,14 @@ def jepa_loss(
     covariance = centered.T @ centered / max(context.shape[0] - 1, 1)
     covariance_penalty = _off_diagonal(covariance).pow(2).sum() / context.shape[1]
     # total = (
-    #     prediction_term
+    #     similarity
     #     + prediction_variance_weight * prediction_variance
     #     + context_variance_weight * context_variance
     #     + covariance_weight * covariance_penalty
     # )
-    total = prediction_term
+    total = similarity
     metrics = {
-        "prediction_loss": prediction_term.item(),
-        "similarity": cosine_loss.item(),
-        "prediction_l2": l2_loss.item(),
+        "similarity": similarity.item(),
         "prediction_variance": prediction_variance.item(),
         "context_variance": context_variance.item(),
         "context_covariance": covariance_penalty.item(),
@@ -188,31 +101,19 @@ def jepa_loss(
     return total, metrics
 
 
-def subnetwork_diversity_loss(
+def rsn_diversity_loss(
     predictions: torch.Tensor,
     row_group_ids: torch.Tensor,
-    group_subnetwork_ids: torch.Tensor,
+    group_rsn_ids: torch.Tensor,
 ) -> torch.Tensor:
-    """Penalize aligned mean prediction directions across aligned subnetworks."""
+    """Penalize aligned mean prediction directions across RSNs in a batch."""
     pooled = torch.stack(
-        [
-            predictions[row_group_ids == group].mean(0)
-            for group in range(len(group_subnetwork_ids))
-        ]
+        [predictions[row_group_ids == group].mean(0) for group in range(len(group_rsn_ids))]
     )
-    subnetwork_means = torch.stack(
-        [
-            pooled[group_subnetwork_ids == group].mean(0)
-            for group in group_subnetwork_ids.unique()
-        ]
+    rsn_means = torch.stack(
+        [pooled[group_rsn_ids == rsn].mean(0) for rsn in group_rsn_ids.unique()]
     )
-    if subnetwork_means.shape[0] < 2:
+    if rsn_means.shape[0] < 2:
         return predictions.new_zeros(())
-    normalized = F.normalize(subnetwork_means, dim=-1)
-    similarities = normalized @ normalized.T
+    similarities = F.normalize(rsn_means, dim=-1) @ F.normalize(rsn_means, dim=-1).T
     return _off_diagonal(similarities).pow(2).mean()
-
-
-# Backward-compatible names for external atlas-RSN callers.
-per_rsn_prediction_losses = per_subnetwork_prediction_losses
-rsn_diversity_loss = subnetwork_diversity_loss
