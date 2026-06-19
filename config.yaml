@@ -27,12 +27,12 @@ model:
   feature_mode: conv1d
   feature_dim: 128
   encoder_type: gat
-  encoder_hidden: 256
+  encoder_hidden: 128
   encoder_layers: 2
   encoder_heads: 4
   encoder_dropout: 0.1
-  predictor_type: gat
-  predictor_hidden: 256
+  predictor_type: gcn
+  predictor_hidden: 128
   predictor_layers: 2
   predictor_heads: 2
   predictor_dropout: 0.1
