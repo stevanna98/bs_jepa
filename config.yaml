@@ -31,7 +31,7 @@ model:
   encoder_layers: 2
   encoder_heads: 4
   encoder_dropout: 0.1
-  predictor_type: gcn
+  predictor_type: gat
   predictor_hidden: 128
   predictor_layers: 2
   predictor_heads: 2
