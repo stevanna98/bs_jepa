@@ -23,17 +23,17 @@ masking:
   num_targets: 1
 
 model:
-  embed_dim: 256
+  embed_dim: 64
   feature_mode: conv1d
-  feature_dim: 128
-  encoder_type: gcn
-  encoder_hidden: 128
-  encoder_layers: 2
+  feature_dim: 32
+  encoder_type: gat
+  encoder_hidden: 64
+  encoder_layers: 1
   encoder_heads: 4
   encoder_dropout: 0.1
-  predictor_type: gcn
-  predictor_hidden: 128
-  predictor_layers: 2
+  predictor_type: gat
+  predictor_hidden: 8
+  predictor_layers: 1
   predictor_heads: 2
   predictor_dropout: 0.0
   region_positional_encoding: true
