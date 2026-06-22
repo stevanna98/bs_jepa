@@ -23,9 +23,9 @@ masking:
   num_targets: 2
 
 model:
-  embed_dim: 256
+  embed_dim: 32
   feature_mode: conv1d
-  feature_dim: 128
+  feature_dim: 256
   encoder_type: gat
   encoder_hidden: 128
   encoder_layers: 2
