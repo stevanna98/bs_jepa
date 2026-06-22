@@ -208,6 +208,132 @@ def subject_similarity_diagnostics(
     return similarity, off_diagonal, metrics
 
 
+def _off_diagonal_values(matrix: torch.Tensor) -> torch.Tensor:
+    mask = ~torch.eye(len(matrix), dtype=torch.bool, device=matrix.device)
+    return matrix[mask]
+
+
+def _distribution_metrics(
+    values: torch.Tensor, prefix: str
+) -> dict[str, float]:
+    if values.numel() == 0:
+        return {
+            f"{prefix}_{name}": float("nan")
+            for name in ("mean", "std", "min", "max")
+        }
+    return {
+        f"{prefix}_mean": values.mean().item(),
+        f"{prefix}_std": values.std(unbiased=False).item(),
+        f"{prefix}_min": values.min().item(),
+        f"{prefix}_max": values.max().item(),
+    }
+
+
+def cohort_centered_cosine_diagnostics(
+    embeddings: torch.Tensor,
+    *,
+    epsilon: float = 1e-12,
+) -> tuple[torch.Tensor, torch.Tensor, dict[str, float]]:
+    """Compute cosine similarity after removing the cohort-mean embedding."""
+    if embeddings.ndim != 2:
+        raise ValueError("Subject embeddings must be a two-dimensional tensor")
+    if epsilon <= 0:
+        raise ValueError("Centered-cosine epsilon must be positive")
+    centered = embeddings.float() - embeddings.float().mean(dim=0, keepdim=True)
+    normalized = F.normalize(centered, p=2, dim=1, eps=epsilon)
+    similarity = normalized @ normalized.T
+    off_diagonal = _off_diagonal_values(similarity)
+    return (
+        similarity,
+        off_diagonal,
+        _distribution_metrics(off_diagonal, "subject_centered_cosine"),
+    )
+
+
+def subject_variance_rank_diagnostics(
+    embeddings: torch.Tensor,
+    *,
+    near_zero_threshold: float = 1e-8,
+) -> tuple[torch.Tensor, torch.Tensor, dict[str, float]]:
+    """Measure feature variance and effective dimensionality across subjects."""
+    if embeddings.ndim != 2:
+        raise ValueError("Subject embeddings must be a two-dimensional tensor")
+    if near_zero_threshold < 0:
+        raise ValueError("Near-zero variance threshold must be non-negative")
+    values = embeddings.float()
+    feature_variances = values.var(dim=0, unbiased=False)
+    variance_metrics = {
+        "subject_feature_variance_mean": feature_variances.mean().item(),
+        "subject_feature_variance_median": feature_variances.quantile(0.5).item(),
+        "subject_feature_variance_min": feature_variances.min().item(),
+        "subject_feature_variance_max": feature_variances.max().item(),
+        "subject_feature_near_zero_fraction": (
+            feature_variances <= near_zero_threshold
+        ).float().mean().item(),
+    }
+
+    centered = values - values.mean(dim=0, keepdim=True)
+    singular_values = torch.linalg.svdvals(centered)
+    energy = singular_values.square()
+    total_energy = energy.sum()
+    if total_energy <= 0:
+        explained_variance = energy
+        rank_metrics = {
+            "subject_effective_rank": 0.0,
+            "subject_matrix_rank": 0.0,
+            "subject_largest_singular_energy_fraction": 0.0,
+            "subject_components_90pct": 0.0,
+        }
+    else:
+        explained_variance = energy / total_energy
+        nonzero_probabilities = explained_variance[explained_variance > 0]
+        entropy = -(
+            nonzero_probabilities * nonzero_probabilities.log()
+        ).sum()
+        cumulative = explained_variance.cumsum(0)
+        components_90 = int(
+            torch.searchsorted(
+                cumulative,
+                cumulative.new_tensor(0.9),
+            ).item()
+        ) + 1
+        rank_metrics = {
+            "subject_effective_rank": entropy.exp().item(),
+            "subject_matrix_rank": float(torch.linalg.matrix_rank(centered).item()),
+            "subject_largest_singular_energy_fraction": explained_variance.max().item(),
+            "subject_components_90pct": float(components_90),
+        }
+    return feature_variances, explained_variance, {**variance_metrics, **rank_metrics}
+
+
+def standardized_euclidean_diagnostics(
+    embeddings: torch.Tensor,
+    *,
+    epsilon: float = 1e-6,
+    near_zero_threshold: float = 1e-8,
+) -> tuple[torch.Tensor, torch.Tensor, dict[str, float]]:
+    """Compute pairwise distance after cohort-wise feature standardization."""
+    if embeddings.ndim != 2:
+        raise ValueError("Subject embeddings must be a two-dimensional tensor")
+    if epsilon <= 0:
+        raise ValueError("Standardization epsilon must be positive")
+    if near_zero_threshold < 0:
+        raise ValueError("Near-zero variance threshold must be non-negative")
+    values = embeddings.float()
+    mean = values.mean(dim=0, keepdim=True)
+    variance = values.var(dim=0, unbiased=False)
+    standard_deviation = variance.sqrt().clamp_min(epsilon)
+    standardized = (values - mean) / standard_deviation
+    standardized[:, variance <= near_zero_threshold] = 0
+    distances = torch.cdist(standardized, standardized, p=2)
+    off_diagonal = _off_diagonal_values(distances)
+    return (
+        distances,
+        off_diagonal,
+        _distribution_metrics(off_diagonal, "subject_standardized_distance"),
+    )
+
+
 @torch.no_grad()
 def extract_graph_embeddings(
     model: BSJEPA,

@@ -60,9 +60,13 @@ training:
   save_plots: true
   plot_frequency: 1
   subject_similarity_diagnostics: true
+  subject_extended_diagnostics: true
   subject_embedding_batch_size: 32
   subject_similarity_max_ticks: 40
   subject_similarity_histogram_bins: 30
+  subject_centered_cosine_epsilon: 1.0e-12
+  subject_near_zero_variance_threshold: 1.0e-8
+  subject_standardization_epsilon: 1.0e-6
   collapse_metrics: true
   save_final_artifact: true
   artifact_name:

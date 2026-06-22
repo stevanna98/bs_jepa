@@ -83,6 +83,154 @@ def save_subject_similarity_plots(
     )
 
 
+def _set_subject_ticks(subject_ids: list[str], max_tick_labels: int) -> None:
+    subject_count = len(subject_ids)
+    if max_tick_labels > 0 and subject_count:
+        step = max(1, int(np.ceil(subject_count / max_tick_labels)))
+        positions = np.arange(0, subject_count, step)
+        labels = [subject_ids[index] for index in positions]
+        plt.xticks(positions, labels, rotation=90, fontsize=7)
+        plt.yticks(positions, labels, fontsize=7)
+    else:
+        plt.xticks([])
+        plt.yticks([])
+
+
+def save_extended_subject_diagnostic_plots(
+    centered_similarity: torch.Tensor,
+    centered_off_diagonal: torch.Tensor,
+    feature_variances: torch.Tensor,
+    explained_variance: torch.Tensor,
+    standardized_distances: torch.Tensor,
+    distance_off_diagonal: torch.Tensor,
+    subject_ids: list[str],
+    plot_dir: str | Path,
+    *,
+    epoch: int,
+    dpi: int = 150,
+    save_pdf: bool = False,
+    max_tick_labels: int = 40,
+    histogram_bins: int = 30,
+) -> None:
+    """Save the latest centered, spectral, and standardized-distance plots."""
+    subject_count = len(subject_ids)
+    for name, matrix in (
+        ("centered similarity", centered_similarity),
+        ("standardized distance", standardized_distances),
+    ):
+        if matrix.ndim != 2 or matrix.shape != (subject_count, subject_count):
+            raise ValueError(f"Subject {name} matrix must align with subject IDs")
+    if dpi < 1 or max_tick_labels < 0 or histogram_bins < 1:
+        raise ValueError("Plot settings must be positive (max_tick_labels may be zero)")
+    path = Path(plot_dir)
+    path.mkdir(parents=True, exist_ok=True)
+
+    plt.figure(figsize=(7, 6))
+    image = plt.imshow(
+        centered_similarity.detach().cpu().numpy(),
+        vmin=-1,
+        vmax=1,
+        cmap="coolwarm",
+        aspect="auto",
+    )
+    plt.colorbar(image, label="Centered cosine similarity")
+    _set_subject_ticks(subject_ids, max_tick_labels)
+    plt.xlabel("Subject")
+    plt.ylabel("Subject")
+    plt.title(f"Cohort-Centered Subject Similarity (Epoch {epoch})")
+    _save_figure(
+        path / "subject_centered_cosine_heatmap.png",
+        dpi=dpi,
+        save_pdf=save_pdf,
+    )
+
+    plt.figure(figsize=(7, 4))
+    centered_values = centered_off_diagonal.detach().cpu().numpy()
+    if centered_values.size:
+        plt.hist(
+            centered_values,
+            bins=histogram_bins,
+            range=(-1, 1),
+            edgecolor="black",
+        )
+    else:
+        plt.text(0.5, 0.5, "Fewer than two subjects", ha="center", va="center")
+        plt.xlim(-1, 1)
+        plt.ylim(0, 1)
+    plt.xlabel("Off-diagonal centered cosine similarity")
+    plt.ylabel("Count")
+    plt.title(f"Cohort-Centered Similarity (Epoch {epoch})")
+    _save_figure(
+        path / "subject_centered_cosine_histogram.png",
+        dpi=dpi,
+        save_pdf=save_pdf,
+    )
+
+    plt.figure(figsize=(7, 4))
+    plt.hist(
+        feature_variances.detach().cpu().numpy(),
+        bins=histogram_bins,
+        edgecolor="black",
+    )
+    plt.xlabel("Population variance across subjects")
+    plt.ylabel("Feature count")
+    plt.title(f"Subject-Embedding Feature Variance (Epoch {epoch})")
+    _save_figure(
+        path / "subject_feature_variance_histogram.png",
+        dpi=dpi,
+        save_pdf=save_pdf,
+    )
+
+    plt.figure(figsize=(7, 4))
+    spectrum = explained_variance.detach().cpu().numpy()
+    if spectrum.size:
+        plt.plot(np.arange(1, len(spectrum) + 1), spectrum, marker="o")
+    plt.xlabel("Singular component")
+    plt.ylabel("Explained-variance fraction")
+    plt.title(f"Centered Subject-Embedding Spectrum (Epoch {epoch})")
+    plt.grid(alpha=0.3)
+    _save_figure(
+        path / "subject_effective_rank_spectrum.png",
+        dpi=dpi,
+        save_pdf=save_pdf,
+    )
+
+    plt.figure(figsize=(7, 6))
+    image = plt.imshow(
+        standardized_distances.detach().cpu().numpy(),
+        vmin=0,
+        cmap="viridis",
+        aspect="auto",
+    )
+    plt.colorbar(image, label="Standardized Euclidean distance")
+    _set_subject_ticks(subject_ids, max_tick_labels)
+    plt.xlabel("Subject")
+    plt.ylabel("Subject")
+    plt.title(f"Standardized Subject Distance (Epoch {epoch})")
+    _save_figure(
+        path / "subject_standardized_distance_heatmap.png",
+        dpi=dpi,
+        save_pdf=save_pdf,
+    )
+
+    plt.figure(figsize=(7, 4))
+    distance_values = distance_off_diagonal.detach().cpu().numpy()
+    if distance_values.size:
+        plt.hist(distance_values, bins=histogram_bins, edgecolor="black")
+    else:
+        plt.text(0.5, 0.5, "Fewer than two subjects", ha="center", va="center")
+        plt.xlim(0, 1)
+        plt.ylim(0, 1)
+    plt.xlabel("Off-diagonal standardized Euclidean distance")
+    plt.ylabel("Count")
+    plt.title(f"Standardized Subject Distances (Epoch {epoch})")
+    _save_figure(
+        path / "subject_standardized_distance_histogram.png",
+        dpi=dpi,
+        save_pdf=save_pdf,
+    )
+
+
 def _save_training_plots(
     history: list[dict[str, float]],
     plot_dir: str | Path,

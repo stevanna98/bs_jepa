@@ -12,9 +12,12 @@ from torch.utils.data import DataLoader
 
 from .evaluation import (
     LabeledGraphDataset,
+    cohort_centered_cosine_diagnostics,
     evaluate_pmat,
     extract_subject_embeddings,
+    standardized_euclidean_diagnostics,
     subject_similarity_diagnostics,
+    subject_variance_rank_diagnostics,
 )
 from .linear_probe import evaluate_gender_probe
 from .losses import (
@@ -84,12 +87,31 @@ def pretrain(
     diversity_weight = float(config.get("rsn_diversity_weight", 0.0))
     save_plots = bool(config.get("save_plots", True))
     plot_frequency = int(config.get("plot_frequency", 1))
-    subject_diagnostics = bool(config.get("subject_similarity_diagnostics", False))
+    subject_similarity_enabled = bool(
+        config.get("subject_similarity_diagnostics", False)
+    )
+    extended_subject_diagnostics = bool(
+        config.get("subject_extended_diagnostics", False)
+    )
+    subject_diagnostics = subject_similarity_enabled or extended_subject_diagnostics
     subject_embedding_batch_size = int(
         config.get("subject_embedding_batch_size", loader.batch_size or 1)
     )
     if subject_embedding_batch_size < 1:
         raise ValueError("training.subject_embedding_batch_size must be positive")
+    centered_cosine_epsilon = float(
+        config.get("subject_centered_cosine_epsilon", 1e-12)
+    )
+    near_zero_variance_threshold = float(
+        config.get("subject_near_zero_variance_threshold", 1e-8)
+    )
+    standardization_epsilon = float(
+        config.get("subject_standardization_epsilon", 1e-6)
+    )
+    if centered_cosine_epsilon <= 0 or standardization_epsilon <= 0:
+        raise ValueError("Subject diagnostic epsilons must be positive")
+    if near_zero_variance_threshold < 0:
+        raise ValueError("Subject near-zero variance threshold must be non-negative")
     collapse_metrics = bool(config.get("collapse_metrics", True))
     evaluation_frequency = (
         int(evaluation_config["frequency_epochs"])
@@ -204,6 +226,7 @@ def pretrain(
             epoch % plot_frequency == 0 or epoch == epochs
         )
         similarity_plot_data = None
+        extended_plot_data = None
         if subject_diagnostics and plot_interval:
             subject_embeddings, subject_ids = extract_subject_embeddings(
                 model,
@@ -211,15 +234,52 @@ def pretrain(
                 device=device,
                 batch_size=subject_embedding_batch_size,
             )
-            similarity, off_diagonal, similarity_metrics = (
-                subject_similarity_diagnostics(subject_embeddings)
-            )
-            epoch_metrics.update(similarity_metrics)
-            similarity_plot_data = (
-                similarity,
-                off_diagonal,
-                subject_ids,
-            )
+            if subject_similarity_enabled:
+                similarity, off_diagonal, similarity_metrics = (
+                    subject_similarity_diagnostics(subject_embeddings)
+                )
+                epoch_metrics.update(similarity_metrics)
+                similarity_plot_data = (
+                    similarity,
+                    off_diagonal,
+                    subject_ids,
+                )
+            if extended_subject_diagnostics:
+                centered_similarity, centered_off_diagonal, centered_metrics = (
+                    cohort_centered_cosine_diagnostics(
+                        subject_embeddings,
+                        epsilon=centered_cosine_epsilon,
+                    )
+                )
+                feature_variances, explained_variance, variance_rank_metrics = (
+                    subject_variance_rank_diagnostics(
+                        subject_embeddings,
+                        near_zero_threshold=near_zero_variance_threshold,
+                    )
+                )
+                distances, distance_off_diagonal, distance_metrics = (
+                    standardized_euclidean_diagnostics(
+                        subject_embeddings,
+                        epsilon=standardization_epsilon,
+                        near_zero_threshold=near_zero_variance_threshold,
+                    )
+                )
+                epoch_metrics.update(
+                    {
+                        **centered_metrics,
+                        **variance_rank_metrics,
+                        **distance_metrics,
+                    }
+                )
+                extended_plot_data = (
+                    centered_similarity,
+                    centered_off_diagonal,
+                    feature_variances,
+                    explained_variance,
+                    distances,
+                    distance_off_diagonal,
+                    subject_ids,
+                )
         downstream_evaluated = False
         if evaluation_frequency > 0 and (
             epoch % evaluation_frequency == 0 or epoch == epochs
@@ -265,12 +325,26 @@ def pretrain(
             downstream_evaluated
             or plot_interval
         ):
-            from .plotting import save_subject_similarity_plots, save_training_plots
+            from .plotting import (
+                save_extended_subject_diagnostic_plots,
+                save_subject_similarity_plots,
+                save_training_plots,
+            )
 
             save_training_plots(history, output_path / "plots")
             if similarity_plot_data is not None:
                 save_subject_similarity_plots(
                     *similarity_plot_data,
+                    output_path / "plots",
+                    epoch=epoch,
+                    dpi=int(config.get("publication_plot_dpi", 150)),
+                    save_pdf=bool(config.get("save_plot_pdf", False)),
+                    max_tick_labels=int(config.get("subject_similarity_max_ticks", 40)),
+                    histogram_bins=int(config.get("subject_similarity_histogram_bins", 30)),
+                )
+            if extended_plot_data is not None:
+                save_extended_subject_diagnostic_plots(
+                    *extended_plot_data,
                     output_path / "plots",
                     epoch=epoch,
                     dpi=int(config.get("publication_plot_dpi", 150)),
