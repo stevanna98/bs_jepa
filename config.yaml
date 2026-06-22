@@ -21,15 +21,15 @@ data:
   graph_strategy: positive_proportional
   top_k: 8
   threshold: 0.2
-  batch_size: 8
+  batch_size: 16
   num_workers: 0
 
 masking:
   num_targets: 2
 
 model:
-  embed_dim: 32
-  feature_mode: conv1d
+  embed_dim: 128
+  feature_mode: passthrough
   feature_dim: 256
   # Preserve this many coarse windows instead of globally pooling the time axis.
   temporal_pool_bins: 8
