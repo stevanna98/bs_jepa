@@ -25,16 +25,16 @@ masking:
   num_targets: 2
 
 model:
-  embed_dim: 32
+  embed_dim: 512
   feature_mode: conv1d
-  feature_dim: 256
+  feature_dim: 512
   encoder_type: gat
-  encoder_hidden: 128
+  encoder_hidden: 256
   encoder_layers: 2
   encoder_heads: 4
   encoder_dropout: 0.1
   predictor_type: gat
-  predictor_hidden: 128
+  predictor_hidden: 256
   predictor_layers: 2
   predictor_heads: 2
   predictor_dropout: 0.1
