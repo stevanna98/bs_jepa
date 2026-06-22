@@ -8,6 +8,8 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import numpy as np
+import torch
 
 
 def _save_figure(path: Path, *, dpi: int, save_pdf: bool) -> None:
@@ -16,6 +18,70 @@ def _save_figure(path: Path, *, dpi: int, save_pdf: bool) -> None:
     if save_pdf:
         plt.savefig(path.with_suffix(".pdf"), bbox_inches="tight")
     plt.close()
+
+
+def save_subject_similarity_plots(
+    similarity: torch.Tensor,
+    off_diagonal: torch.Tensor,
+    subject_ids: list[str],
+    plot_dir: str | Path,
+    *,
+    epoch: int,
+    dpi: int = 150,
+    save_pdf: bool = False,
+    max_tick_labels: int = 40,
+    histogram_bins: int = 30,
+) -> None:
+    """Save epoch-specific subject cosine-similarity heatmap and histogram."""
+    if similarity.ndim != 2 or similarity.shape[0] != similarity.shape[1]:
+        raise ValueError("Subject similarity matrix must be square")
+    if len(subject_ids) != similarity.shape[0]:
+        raise ValueError("Subject IDs must align with the similarity matrix")
+    if dpi < 1 or max_tick_labels < 0 or histogram_bins < 1:
+        raise ValueError("Plot settings must be positive (max_tick_labels may be zero)")
+    path = Path(plot_dir)
+    path.mkdir(parents=True, exist_ok=True)
+    suffix = f"epoch_{epoch:04d}"
+    matrix = similarity.detach().cpu().numpy()
+
+    plt.figure(figsize=(7, 6))
+    image = plt.imshow(matrix, vmin=-1, vmax=1, cmap="coolwarm", aspect="auto")
+    plt.colorbar(image, label="Cosine similarity")
+    subject_count = len(subject_ids)
+    if max_tick_labels > 0 and subject_count:
+        step = max(1, int(np.ceil(subject_count / max_tick_labels)))
+        positions = np.arange(0, subject_count, step)
+        labels = [subject_ids[index] for index in positions]
+        plt.xticks(positions, labels, rotation=90, fontsize=7)
+        plt.yticks(positions, labels, fontsize=7)
+    else:
+        plt.xticks([])
+        plt.yticks([])
+    plt.xlabel("Subject")
+    plt.ylabel("Subject")
+    plt.title(f"EMA Target Subject Similarity (Epoch {epoch})")
+    _save_figure(
+        path / f"subject_similarity_heatmap_{suffix}.png",
+        dpi=dpi,
+        save_pdf=save_pdf,
+    )
+
+    plt.figure(figsize=(7, 4))
+    values = off_diagonal.detach().cpu().numpy()
+    if values.size:
+        plt.hist(values, bins=histogram_bins, range=(-1, 1), edgecolor="black")
+    else:
+        plt.text(0.5, 0.5, "Fewer than two subjects", ha="center", va="center")
+        plt.xlim(-1, 1)
+        plt.ylim(0, 1)
+    plt.xlabel("Off-diagonal cosine similarity")
+    plt.ylabel("Count")
+    plt.title(f"Between-Subject Similarity (Epoch {epoch})")
+    _save_figure(
+        path / f"subject_similarity_histogram_{suffix}.png",
+        dpi=dpi,
+        save_pdf=save_pdf,
+    )
 
 
 def _save_training_plots(

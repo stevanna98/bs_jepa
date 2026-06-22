@@ -10,7 +10,12 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from .evaluation import LabeledGraphDataset, evaluate_pmat
+from .evaluation import (
+    LabeledGraphDataset,
+    evaluate_pmat,
+    extract_subject_embeddings,
+    subject_similarity_diagnostics,
+)
 from .linear_probe import evaluate_gender_probe
 from .losses import (
     jepa_loss,
@@ -79,6 +84,12 @@ def pretrain(
     diversity_weight = float(config.get("rsn_diversity_weight", 0.0))
     save_plots = bool(config.get("save_plots", True))
     plot_frequency = int(config.get("plot_frequency", 1))
+    subject_diagnostics = bool(config.get("subject_similarity_diagnostics", False))
+    subject_embedding_batch_size = int(
+        config.get("subject_embedding_batch_size", loader.batch_size or 1)
+    )
+    if subject_embedding_batch_size < 1:
+        raise ValueError("training.subject_embedding_batch_size must be positive")
     collapse_metrics = bool(config.get("collapse_metrics", True))
     evaluation_frequency = (
         int(evaluation_config["frequency_epochs"])
@@ -189,6 +200,26 @@ def pretrain(
             "learning_rate": learning_rate,
             "ema_momentum": momentum,
         }
+        plot_interval = save_plots and plot_frequency > 0 and (
+            epoch % plot_frequency == 0 or epoch == epochs
+        )
+        similarity_plot_data = None
+        if subject_diagnostics and plot_interval:
+            subject_embeddings, subject_ids = extract_subject_embeddings(
+                model,
+                loader.dataset,
+                device=device,
+                batch_size=subject_embedding_batch_size,
+            )
+            similarity, off_diagonal, similarity_metrics = (
+                subject_similarity_diagnostics(subject_embeddings)
+            )
+            epoch_metrics.update(similarity_metrics)
+            similarity_plot_data = (
+                similarity,
+                off_diagonal,
+                subject_ids,
+            )
         downstream_evaluated = False
         if evaluation_frequency > 0 and (
             epoch % evaluation_frequency == 0 or epoch == epochs
@@ -232,12 +263,19 @@ def pretrain(
             )
         if save_plots and (
             downstream_evaluated
-            or (
-                plot_frequency > 0
-                and (epoch % plot_frequency == 0 or epoch == epochs)
-            )
+            or plot_interval
         ):
-            from .plotting import save_training_plots
+            from .plotting import save_subject_similarity_plots, save_training_plots
 
             save_training_plots(history, output_path / "plots")
+            if similarity_plot_data is not None:
+                save_subject_similarity_plots(
+                    *similarity_plot_data,
+                    output_path / "plots",
+                    epoch=epoch,
+                    dpi=int(config.get("publication_plot_dpi", 150)),
+                    save_pdf=bool(config.get("save_plot_pdf", False)),
+                    max_tick_labels=int(config.get("subject_similarity_max_ticks", 40)),
+                    histogram_bins=int(config.get("subject_similarity_histogram_bins", 30)),
+                )
     return history

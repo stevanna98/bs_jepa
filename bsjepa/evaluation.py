@@ -138,6 +138,77 @@ def split_pmat_holdout(
 
 
 @torch.no_grad()
+def extract_subject_embeddings(
+    model: BSJEPA,
+    dataset: Dataset[Data],
+    *,
+    device: torch.device,
+    batch_size: int,
+) -> tuple[torch.Tensor, list[str]]:
+    """Extract one mean-pooled EMA target embedding per subject in batches."""
+    if batch_size < 1:
+        raise ValueError("Embedding batch size must be positive")
+    model_was_training = model.training
+    target_was_training = model.target_encoder.training
+    model.target_encoder.eval()
+    embeddings: list[torch.Tensor] = []
+    loader = DataLoader(
+        dataset, batch_size=batch_size, shuffle=False, collate_fn=list, drop_last=False
+    )
+    try:
+        for examples in loader:
+            graphs = [
+                example[0] if isinstance(example, tuple) else example
+                for example in examples
+            ]
+            batch = Batch.from_data_list(list(graphs)).to(device)
+            node_embeddings = model.encode(batch)
+            embeddings.extend(
+                part.mean(0).cpu() for part in unbatch(node_embeddings, batch.batch)
+            )
+    finally:
+        model.train(model_was_training)
+        model.target_encoder.train(target_was_training)
+    raw_subject_ids = getattr(dataset, "subject_ids", None)
+    subject_ids = (
+        [normalize_subject_id(value) for value in raw_subject_ids]
+        if raw_subject_ids is not None
+        else [str(index) for index in range(len(dataset))]
+    )
+    if len(subject_ids) != len(embeddings):
+        raise ValueError("Dataset subject IDs must align with extracted embeddings")
+    return torch.stack(embeddings), subject_ids
+
+
+def subject_similarity_diagnostics(
+    embeddings: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, dict[str, float]]:
+    """Return pairwise cosine similarities and off-diagonal summary statistics."""
+    if embeddings.ndim != 2:
+        raise ValueError("Subject embeddings must be a two-dimensional tensor")
+    normalized = F.normalize(embeddings.float(), p=2, dim=1)
+    similarity = normalized @ normalized.T
+    diagonal_mask = torch.eye(
+        len(embeddings), dtype=torch.bool, device=similarity.device
+    )
+    off_diagonal = similarity[~diagonal_mask]
+    prefix = "subject_cosine_similarity"
+    if off_diagonal.numel() == 0:
+        metrics = {
+            f"{prefix}_{name}": float("nan")
+            for name in ("mean", "std", "min", "max")
+        }
+    else:
+        metrics = {
+            f"{prefix}_mean": off_diagonal.mean().item(),
+            f"{prefix}_std": off_diagonal.std(unbiased=False).item(),
+            f"{prefix}_min": off_diagonal.min().item(),
+            f"{prefix}_max": off_diagonal.max().item(),
+        }
+    return similarity, off_diagonal, metrics
+
+
+@torch.no_grad()
 def extract_graph_embeddings(
     model: BSJEPA,
     dataset: LabeledGraphDataset,
@@ -145,27 +216,11 @@ def extract_graph_embeddings(
     device: torch.device,
     batch_size: int,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    model_was_training = model.training
-    target_was_training = model.target_encoder.training
-    model.target_encoder.eval()
-    embeddings: list[torch.Tensor] = []
-    labels: list[torch.Tensor] = []
-    loader = DataLoader(
-        dataset, batch_size=batch_size, shuffle=False, collate_fn=list, drop_last=False
+    """Extract graph embeddings and labels for downstream probes."""
+    embeddings, _ = extract_subject_embeddings(
+        model, dataset, device=device, batch_size=batch_size
     )
-    try:
-        for examples in loader:
-            graphs, batch_labels = zip(*examples, strict=True)
-            batch = Batch.from_data_list(list(graphs)).to(device)
-            node_embeddings = model.encode(batch)
-            embeddings.extend(
-                part.mean(0).cpu() for part in unbatch(node_embeddings, batch.batch)
-            )
-            labels.extend(label.detach().cpu() for label in batch_labels)
-    finally:
-        model.train(model_was_training)
-        model.target_encoder.train(target_was_training)
-    return torch.stack(embeddings), torch.stack(labels)
+    return embeddings, dataset.labels.detach().cpu().clone()
 
 
 def _regression_metrics(
