@@ -15,10 +15,10 @@ data:
   transpose_bold: false
   # Options: dense, top_k, absolute_threshold, positive_proportional.
   # For positive_proportional, threshold is the retained fraction of positive edges.
-  graph_strategy: top_k
+  graph_strategy: positive_proportional
   top_k: 8
   threshold: 0.2
-  batch_size: 32
+  batch_size: 8
   num_workers: 0
 
 masking:
