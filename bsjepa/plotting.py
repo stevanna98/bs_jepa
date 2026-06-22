@@ -32,7 +32,7 @@ def save_subject_similarity_plots(
     max_tick_labels: int = 40,
     histogram_bins: int = 30,
 ) -> None:
-    """Save epoch-specific subject cosine-similarity heatmap and histogram."""
+    """Save the latest subject cosine-similarity heatmap and histogram."""
     if similarity.ndim != 2 or similarity.shape[0] != similarity.shape[1]:
         raise ValueError("Subject similarity matrix must be square")
     if len(subject_ids) != similarity.shape[0]:
@@ -41,7 +41,6 @@ def save_subject_similarity_plots(
         raise ValueError("Plot settings must be positive (max_tick_labels may be zero)")
     path = Path(plot_dir)
     path.mkdir(parents=True, exist_ok=True)
-    suffix = f"epoch_{epoch:04d}"
     matrix = similarity.detach().cpu().numpy()
 
     plt.figure(figsize=(7, 6))
@@ -61,7 +60,7 @@ def save_subject_similarity_plots(
     plt.ylabel("Subject")
     plt.title(f"EMA Target Subject Similarity (Epoch {epoch})")
     _save_figure(
-        path / f"subject_similarity_heatmap_{suffix}.png",
+        path / "subject_similarity_heatmap.png",
         dpi=dpi,
         save_pdf=save_pdf,
     )
@@ -78,7 +77,7 @@ def save_subject_similarity_plots(
     plt.ylabel("Count")
     plt.title(f"Between-Subject Similarity (Epoch {epoch})")
     _save_figure(
-        path / f"subject_similarity_histogram_{suffix}.png",
+        path / "subject_similarity_histogram.png",
         dpi=dpi,
         save_pdf=save_pdf,
     )

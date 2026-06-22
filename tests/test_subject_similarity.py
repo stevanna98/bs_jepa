@@ -117,8 +117,17 @@ def test_similarity_plots_created_for_small_synthetic_dataset(tmp_path) -> None:
         similarity, off_diagonal, subject_ids, tmp_path, epoch=3
     )
 
-    assert (tmp_path / "subject_similarity_heatmap_epoch_0003.png").is_file()
-    assert (tmp_path / "subject_similarity_histogram_epoch_0003.png").is_file()
+    heatmap = tmp_path / "subject_similarity_heatmap.png"
+    histogram = tmp_path / "subject_similarity_histogram.png"
+    assert heatmap.is_file()
+    assert histogram.is_file()
+    original_files = set(tmp_path.iterdir())
+
+    save_subject_similarity_plots(
+        similarity, off_diagonal, subject_ids, tmp_path, epoch=4
+    )
+
+    assert set(tmp_path.iterdir()) == original_files
     assert matplotlib.get_backend().lower() == "agg"
 
 
