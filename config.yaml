@@ -13,6 +13,8 @@ data:
   bold_key: BOLD
   fc_key: FC
   transpose_bold: false
+  # Options: dense, top_k, absolute_threshold, positive_proportional.
+  # For positive_proportional, threshold is the retained fraction of positive edges.
   graph_strategy: top_k
   top_k: 8
   threshold: 0.2

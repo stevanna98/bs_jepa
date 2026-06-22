@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import math
 import pickle
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,7 +14,9 @@ import torch
 from torch.utils.data import Dataset
 from torch_geometric.data import Data
 
-GraphStrategy = Literal["dense", "top_k", "absolute_threshold"]
+GraphStrategy = Literal[
+    "dense", "top_k", "absolute_threshold", "positive_proportional"
+]
 NodeFeatures = Literal["bold", "fc_row", "ones"]
 
 
@@ -93,6 +96,31 @@ def build_graph(
         adjacency *= union_mask
     elif strategy == "absolute_threshold":
         adjacency *= adjacency.abs() >= threshold
+    elif strategy == "positive_proportional":
+        if not 0 < threshold <= 1:
+            raise ValueError(
+                "positive_proportional threshold must be in the interval (0, 1]"
+            )
+        # Treat FC as an undirected matrix, discard non-positive connections, and
+        # retain the requested proportion of the remaining positive edge set.
+        symmetric = (adjacency + adjacency.T) / 2
+        upper_mask = torch.triu(
+            torch.ones_like(symmetric, dtype=torch.bool), diagonal=1
+        )
+        positive_mask = upper_mask & (symmetric > 0)
+        source, target = positive_mask.nonzero(as_tuple=True)
+        values = symmetric[source, target]
+        adjacency = torch.zeros_like(symmetric)
+        if values.numel() > 0:
+            keep_count = min(
+                math.ceil(float(threshold) * values.numel()), values.numel()
+            )
+            selected = values.topk(keep_count).indices
+            selected_source = source[selected]
+            selected_target = target[selected]
+            selected_values = values[selected]
+            adjacency[selected_source, selected_target] = selected_values
+            adjacency[selected_target, selected_source] = selected_values
     elif strategy != "dense":
         raise ValueError(f"Unknown graph strategy: {strategy}")
     source, target = adjacency.nonzero(as_tuple=True)
