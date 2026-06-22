@@ -38,7 +38,7 @@ model:
   predictor_layers: 2
   predictor_heads: 2
   predictor_dropout: 0.1
-  region_positional_encoding: false
+  region_positional_encoding: true
 
 training:
   epochs: 50
