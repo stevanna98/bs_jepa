@@ -34,7 +34,7 @@ model:
   encoder_heads: 4
   encoder_dropout: 0.1
   predictor_type: gat
-  predictor_hidden: 256
+  predictor_hidden: 128
   predictor_layers: 2
   predictor_heads: 2
   predictor_dropout: 0.1
