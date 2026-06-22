@@ -1,10 +1,13 @@
 seed: 42
-output_dir: /content/drive/MyDrive/IMPERIAL/bs_jepa/
+# output_dir: /content/drive/MyDrive/IMPERIAL/bs_jepa/
+output_dir: /content/drive/MyDrive/IMPERIAL/IMPERIAL/bs_jepa/
 
 data:
   # Use "synthetic", a subject dictionary (.pkl/.pt), or a directory of .pt/.npz files.
-  source: /content/drive/MyDrive/IMPERIAL/data/subject_data_1_cleaned_precise_age.pkl
-  atlas_csv: /content/drive/MyDrive/IMPERIAL/data/glasser379_to_rsn12.csv
+  # source: /content/drive/MyDrive/IMPERIAL/data/subject_data_1_cleaned_precise_age.pkl
+  source: /content/drive/MyDrive/IMPERIAL/IMPERIAL/data/subject_data_1_cleaned_precise_age.pkl
+  # atlas_csv: /content/drive/MyDrive/IMPERIAL/data/glasser379_to_rsn12.csv
+  atlas_csv: /content/drive/MyDrive/IMPERIAL/IMPERIAL/data/glasser379_to_rsn12.csv
   num_subjects: 16
   num_regions: 40
   num_rsns: 8
@@ -68,7 +71,7 @@ training:
   subject_near_zero_variance_threshold: 1.0e-8
   subject_standardization_epsilon: 1.0e-6
   region_stage_diagnostics: true
-  region_stage_diagnostics_frequency: 5
+  region_stage_diagnostics_frequency: 1
   region_stage_diagnostics_batch_size: 32
   region_stage_near_zero_threshold: 1.0e-8
   region_stage_norm_epsilon: 1.0e-12
