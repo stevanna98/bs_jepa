@@ -31,6 +31,8 @@ model:
   embed_dim: 32
   feature_mode: conv1d
   feature_dim: 256
+  # Preserve this many coarse windows instead of globally pooling the time axis.
+  temporal_pool_bins: 8
   encoder_type: gat
   encoder_hidden: 128
   encoder_layers: 2

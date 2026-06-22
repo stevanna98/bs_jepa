@@ -19,10 +19,14 @@ FeatureMode = Literal["passthrough", "conv1d"]
 
 
 class TemporalConv(nn.Module):
-    """Trainable BOLD time-series feature extractor."""
+    """Trainable BOLD encoder that preserves coarse temporal structure."""
 
-    def __init__(self, out_channels: int, kernel_size: int = 7) -> None:
+    def __init__(
+        self, out_channels: int, kernel_size: int = 7, pool_bins: int = 8
+    ) -> None:
         super().__init__()
+        if pool_bins < 1:
+            raise ValueError("pool_bins must be positive")
         hidden = max(out_channels // 2, 1)
         self.convs = nn.Sequential(
             nn.Conv1d(1, hidden, kernel_size, stride=2, padding=kernel_size // 2),
@@ -30,11 +34,20 @@ class TemporalConv(nn.Module):
             nn.Conv1d(hidden, out_channels, kernel_size, stride=2, padding=kernel_size // 2),
             nn.GELU(),
         )
-        self.projection = nn.Linear(2 * out_channels, out_channels)
+        self.pool_bins = pool_bins
+        self.pool = nn.AdaptiveAvgPool1d(pool_bins)
+        self.projection = nn.Linear(2 * pool_bins * out_channels, out_channels)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         hidden = self.convs(x.unsqueeze(1))
-        pooled = torch.cat([hidden.mean(-1), hidden.amax(-1)], dim=-1)
+        # Retain the ordering of coarse time windows and their local variability.
+        # A global mean/max pool makes temporally distinct BOLD signals much easier
+        # to map to the same feature vector.
+        window_mean = self.pool(hidden)
+        window_second_moment = self.pool(hidden.square())
+        window_variance = (window_second_moment - window_mean.square()).clamp_min(0)
+        window_std = (window_variance + 1e-6).sqrt()
+        pooled = torch.cat([window_mean, window_std], dim=1).flatten(1)
         return self.projection(pooled)
 
 
@@ -54,6 +67,7 @@ class GraphNetwork(nn.Module):
         num_regions: int | None,
         feature_mode: FeatureMode = "passthrough",
         feature_dim: int = 64,
+        temporal_pool_bins: int = 8,
     ) -> None:
         super().__init__()
         if num_layers < 1:
@@ -65,7 +79,9 @@ class GraphNetwork(nn.Module):
         self.kind = kind
         self.dropout = dropout
         self.feature_extractor = (
-            TemporalConv(feature_dim) if feature_mode == "conv1d" else None
+            TemporalConv(feature_dim, pool_bins=temporal_pool_bins)
+            if feature_mode == "conv1d"
+            else None
         )
         projection_input = feature_dim if self.feature_extractor else in_channels
         self.input_projection = nn.Linear(projection_input, hidden_channels)
@@ -249,6 +265,7 @@ def build_bsjepa(
     encoder_dropout: float = 0.0,
     feature_mode: FeatureMode = "passthrough",
     feature_dim: int = 64,
+    temporal_pool_bins: int = 8,
     predictor_type: GraphLayer = "gcn",
     predictor_hidden: int = 256,
     predictor_layers: int = 2,
@@ -262,6 +279,7 @@ def build_bsjepa(
         in_channels, encoder_hidden, embed_dim, kind=encoder_type,
         num_layers=encoder_layers, heads=encoder_heads, dropout=encoder_dropout,
         num_regions=positional_regions, feature_mode=feature_mode, feature_dim=feature_dim,
+        temporal_pool_bins=temporal_pool_bins,
     )
     predictor = GraphNetwork(
         embed_dim, predictor_hidden, embed_dim, kind=predictor_type,

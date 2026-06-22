@@ -199,6 +199,33 @@ def test_graph_encoder_collects_every_stage_without_changing_standard_forward(
     assert not hasattr(encoder, "diagnostic_activations")
 
 
+def test_temporal_encoder_retains_coarse_temporal_order() -> None:
+    encoder = GraphNetwork(
+        in_channels=32,
+        hidden_channels=8,
+        out_channels=4,
+        kind="gcn",
+        num_layers=1,
+        heads=1,
+        dropout=0.0,
+        num_regions=None,
+        feature_mode="conv1d",
+        feature_dim=6,
+        temporal_pool_bins=4,
+    ).eval()
+    temporal = encoder.feature_extractor
+    assert temporal is not None
+
+    signal = torch.cat([torch.zeros(16), torch.ones(16)]).unsqueeze(0)
+    shifted = torch.cat([torch.ones(16), torch.zeros(16)]).unsqueeze(0)
+
+    first = temporal(signal)
+    second = temporal(shifted)
+
+    assert first.shape == second.shape == (1, 6)
+    assert not torch.allclose(first, second)
+
+
 def test_region_stage_plots_created_from_synthetic_history(tmp_path) -> None:
     history = [
         {
