@@ -15,6 +15,8 @@ from .evaluation import (
     cohort_centered_cosine_diagnostics,
     evaluate_pmat,
     extract_subject_embeddings,
+    extract_target_encoder_diagnostics,
+    region_stage_cross_subject_diagnostics,
     standardized_euclidean_diagnostics,
     subject_similarity_diagnostics,
     subject_variance_rank_diagnostics,
@@ -112,6 +114,25 @@ def pretrain(
         raise ValueError("Subject diagnostic epsilons must be positive")
     if near_zero_variance_threshold < 0:
         raise ValueError("Subject near-zero variance threshold must be non-negative")
+    region_stage_enabled = bool(config.get("region_stage_diagnostics", False))
+    region_stage_frequency = int(
+        config.get("region_stage_diagnostics_frequency", plot_frequency)
+    )
+    region_stage_batch_size = int(
+        config.get("region_stage_diagnostics_batch_size", loader.batch_size or 1)
+    )
+    region_stage_near_zero_threshold = float(
+        config.get("region_stage_near_zero_threshold", 1e-8)
+    )
+    region_stage_norm_epsilon = float(
+        config.get("region_stage_norm_epsilon", 1e-12)
+    )
+    if region_stage_enabled and region_stage_frequency <= 0:
+        raise ValueError("training.region_stage_diagnostics_frequency must be positive")
+    if region_stage_batch_size < 1:
+        raise ValueError("training.region_stage_diagnostics_batch_size must be positive")
+    if region_stage_near_zero_threshold < 0 or region_stage_norm_epsilon <= 0:
+        raise ValueError("Invalid region-stage diagnostic numerical threshold")
     collapse_metrics = bool(config.get("collapse_metrics", True))
     evaluation_frequency = (
         int(evaluation_config["frequency_epochs"])
@@ -227,13 +248,44 @@ def pretrain(
         )
         similarity_plot_data = None
         extended_plot_data = None
-        if subject_diagnostics and plot_interval:
+        region_plot_data = None
+        subject_due = subject_diagnostics and plot_interval
+        region_due = region_stage_enabled and (
+            epoch % region_stage_frequency == 0 or epoch == epochs
+        )
+        subject_embeddings = None
+        subject_ids = None
+        region_stages = None
+        if subject_due and region_due:
+            subject_embeddings, subject_ids, region_stages = (
+                extract_target_encoder_diagnostics(
+                    model,
+                    loader.dataset,
+                    device=device,
+                    batch_size=min(
+                        subject_embedding_batch_size, region_stage_batch_size
+                    ),
+                    collect_region_stages=True,
+                )
+            )
+        elif subject_due:
             subject_embeddings, subject_ids = extract_subject_embeddings(
                 model,
                 loader.dataset,
                 device=device,
                 batch_size=subject_embedding_batch_size,
             )
+        elif region_due:
+            _, _, region_stages = extract_target_encoder_diagnostics(
+                model,
+                loader.dataset,
+                device=device,
+                batch_size=region_stage_batch_size,
+                collect_region_stages=True,
+            )
+        if subject_due:
+            if subject_embeddings is None or subject_ids is None:
+                raise RuntimeError("Subject diagnostic extraction did not return data")
             if subject_similarity_enabled:
                 similarity, off_diagonal, similarity_metrics = (
                     subject_similarity_diagnostics(subject_embeddings)
@@ -280,6 +332,18 @@ def pretrain(
                     distance_off_diagonal,
                     subject_ids,
                 )
+        if region_due:
+            if region_stages is None:
+                raise RuntimeError("Region-stage diagnostic extraction did not return data")
+            region_metrics, per_region_variances = (
+                region_stage_cross_subject_diagnostics(
+                    region_stages,
+                    near_zero_threshold=region_stage_near_zero_threshold,
+                    norm_epsilon=region_stage_norm_epsilon,
+                )
+            )
+            epoch_metrics.update(region_metrics)
+            region_plot_data = per_region_variances
         downstream_evaluated = False
         if evaluation_frequency > 0 and (
             epoch % evaluation_frequency == 0 or epoch == epochs
@@ -324,9 +388,11 @@ def pretrain(
         if save_plots and (
             downstream_evaluated
             or plot_interval
+            or region_due
         ):
             from .plotting import (
                 save_extended_subject_diagnostic_plots,
+                save_region_stage_diagnostic_plots,
                 save_subject_similarity_plots,
                 save_training_plots,
             )
@@ -341,6 +407,15 @@ def pretrain(
                     save_pdf=bool(config.get("save_plot_pdf", False)),
                     max_tick_labels=int(config.get("subject_similarity_max_ticks", 40)),
                     histogram_bins=int(config.get("subject_similarity_histogram_bins", 30)),
+                )
+            if region_plot_data is not None:
+                save_region_stage_diagnostic_plots(
+                    history,
+                    region_plot_data,
+                    output_path / "plots",
+                    epoch=epoch,
+                    dpi=int(config.get("publication_plot_dpi", 150)),
+                    save_pdf=bool(config.get("save_plot_pdf", False)),
                 )
             if extended_plot_data is not None:
                 save_extended_subject_diagnostic_plots(

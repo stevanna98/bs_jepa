@@ -91,14 +91,33 @@ class GraphNetwork(nn.Module):
             nn.LayerNorm(dimensions[i + 1]) for i in range(num_layers)
         )
 
-    def forward(self, data: Data) -> torch.Tensor:
-        x = self.feature_extractor(data.x) if self.feature_extractor else data.x
-        x = self.input_projection(x)
+    def _forward_impl(
+        self, data: Data, *, collect_diagnostics: bool
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor] | None]:
+        activations: dict[str, torch.Tensor] | None = (
+            {} if collect_diagnostics else None
+        )
+        raw = data.x
+        temporal = self.feature_extractor(raw) if self.feature_extractor else raw
+        projected = self.input_projection(temporal)
         if self.region_embedding is not None:
             region_ids = getattr(data, "region_ids", None)
             if region_ids is None:
-                region_ids = torch.arange(data.num_nodes, device=x.device)
-            x = x + self.region_embedding(region_ids)
+                region_ids = torch.arange(data.num_nodes, device=projected.device)
+            positions = self.region_embedding(region_ids)
+        else:
+            positions = torch.zeros_like(projected)
+        x = projected + positions
+        if activations is not None:
+            activations.update(
+                {
+                    "raw": raw.detach(),
+                    "temporal": temporal.detach(),
+                    "projection": projected.detach(),
+                    "position": positions.detach(),
+                    "post_position": x.detach(),
+                }
+            )
 
         edge_weight = data.edge_attr.squeeze(-1) if data.edge_attr is not None else None
         for index, (layer, norm) in enumerate(zip(self.layers, self.norms, strict=True)):
@@ -108,9 +127,26 @@ class GraphNetwork(nn.Module):
                 else layer(x, data.edge_index, data.edge_attr)
             )
             x = norm(x)
+            if activations is not None:
+                activations[f"{self.kind}_layer_{index}"] = x.detach()
             if index + 1 < len(self.layers):
                 x = F.dropout(F.gelu(x), self.dropout, self.training)
-        return x
+        if activations is not None:
+            activations["final"] = x.detach()
+        return x, activations
+
+    def forward(self, data: Data) -> torch.Tensor:
+        output, _ = self._forward_impl(data, collect_diagnostics=False)
+        return output
+
+    def forward_with_diagnostics(
+        self, data: Data
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        """Return encoder output and detached stage activations for diagnostics."""
+        output, activations = self._forward_impl(data, collect_diagnostics=True)
+        if activations is None:
+            raise RuntimeError("Diagnostic activation collection failed")
+        return output, activations
 
 
 class BSJEPA(nn.Module):

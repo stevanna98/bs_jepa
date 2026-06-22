@@ -67,6 +67,11 @@ training:
   subject_centered_cosine_epsilon: 1.0e-12
   subject_near_zero_variance_threshold: 1.0e-8
   subject_standardization_epsilon: 1.0e-6
+  region_stage_diagnostics: true
+  region_stage_diagnostics_frequency: 5
+  region_stage_diagnostics_batch_size: 32
+  region_stage_near_zero_threshold: 1.0e-8
+  region_stage_norm_epsilon: 1.0e-12
   collapse_metrics: true
   save_final_artifact: true
   artifact_name:

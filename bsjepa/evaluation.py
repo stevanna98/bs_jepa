@@ -19,6 +19,8 @@ from torch_geometric.utils import unbatch
 from .model import BSJEPA
 from .data import SubjectSubset
 
+RegionStageActivations = dict[str, dict[int, list[torch.Tensor]]]
+
 
 def normalize_subject_id(value: Any) -> str:
     """Normalize dataset keys and CSV values without coercing leading zeroes."""
@@ -138,20 +140,24 @@ def split_pmat_holdout(
 
 
 @torch.no_grad()
-def extract_subject_embeddings(
+def extract_target_encoder_diagnostics(
     model: BSJEPA,
     dataset: Dataset[Data],
     *,
     device: torch.device,
     batch_size: int,
-) -> tuple[torch.Tensor, list[str]]:
-    """Extract one mean-pooled EMA target embedding per subject in batches."""
+    collect_region_stages: bool = False,
+) -> tuple[torch.Tensor, list[str], RegionStageActivations | None]:
+    """Extract pooled embeddings and optional aligned EMA encoder stages in batches."""
     if batch_size < 1:
         raise ValueError("Embedding batch size must be positive")
     model_was_training = model.training
     target_was_training = model.target_encoder.training
     model.target_encoder.eval()
     embeddings: list[torch.Tensor] = []
+    region_stages: RegionStageActivations | None = (
+        {} if collect_region_stages else None
+    )
     loader = DataLoader(
         dataset, batch_size=batch_size, shuffle=False, collate_fn=list, drop_last=False
     )
@@ -162,10 +168,36 @@ def extract_subject_embeddings(
                 for example in examples
             ]
             batch = Batch.from_data_list(list(graphs)).to(device)
-            node_embeddings = model.encode(batch)
-            embeddings.extend(
-                part.mean(0).cpu() for part in unbatch(node_embeddings, batch.batch)
-            )
+            if collect_region_stages:
+                diagnostic_forward = getattr(
+                    model.target_encoder, "forward_with_diagnostics", None
+                )
+                if diagnostic_forward is None:
+                    raise TypeError(
+                        "Target encoder does not support region-stage diagnostics"
+                    )
+                node_embeddings, batch_stages = diagnostic_forward(batch)
+            else:
+                node_embeddings = model.encode(batch)
+                batch_stages = None
+            embedding_parts = unbatch(node_embeddings, batch.batch)
+            embeddings.extend(part.mean(0).cpu() for part in embedding_parts)
+            if region_stages is not None and batch_stages is not None:
+                for stage, stage_values in batch_stages.items():
+                    stage_regions = region_stages.setdefault(stage, {})
+                    stage_parts = unbatch(stage_values, batch.batch)
+                    for graph, part in zip(graphs, stage_parts, strict=True):
+                        region_ids = getattr(graph, "region_ids", None)
+                        if region_ids is None:
+                            region_ids = torch.arange(graph.num_nodes)
+                        region_ids = torch.as_tensor(region_ids).cpu()
+                        part = part.detach().cpu()
+                        if len(region_ids) != len(part):
+                            raise ValueError(
+                                "Atlas-region IDs must align with diagnostic activations"
+                            )
+                        for region_id, value in zip(region_ids, part, strict=True):
+                            stage_regions.setdefault(int(region_id), []).append(value)
     finally:
         model.train(model_was_training)
         model.target_encoder.train(target_was_training)
@@ -177,7 +209,26 @@ def extract_subject_embeddings(
     )
     if len(subject_ids) != len(embeddings):
         raise ValueError("Dataset subject IDs must align with extracted embeddings")
-    return torch.stack(embeddings), subject_ids
+    return torch.stack(embeddings), subject_ids, region_stages
+
+
+@torch.no_grad()
+def extract_subject_embeddings(
+    model: BSJEPA,
+    dataset: Dataset[Data],
+    *,
+    device: torch.device,
+    batch_size: int,
+) -> tuple[torch.Tensor, list[str]]:
+    """Extract one mean-pooled EMA target embedding per subject in batches."""
+    embeddings, subject_ids, _ = extract_target_encoder_diagnostics(
+        model,
+        dataset,
+        device=device,
+        batch_size=batch_size,
+        collect_region_stages=False,
+    )
+    return embeddings, subject_ids
 
 
 def subject_similarity_diagnostics(
@@ -332,6 +383,111 @@ def standardized_euclidean_diagnostics(
         off_diagonal,
         _distribution_metrics(off_diagonal, "subject_standardized_distance"),
     )
+
+
+def region_stage_cross_subject_diagnostics(
+    stages: RegionStageActivations,
+    *,
+    near_zero_threshold: float = 1e-8,
+    norm_epsilon: float = 1e-12,
+) -> tuple[dict[str, float], dict[str, dict[int, float]]]:
+    """Summarize same-region variation across subjects at each encoder stage."""
+    if near_zero_threshold < 0:
+        raise ValueError("Region-stage near-zero threshold must be non-negative")
+    if norm_epsilon <= 0:
+        raise ValueError("Region-stage norm epsilon must be positive")
+    metrics: dict[str, float] = {}
+    per_region_variances: dict[str, dict[int, float]] = {}
+    for stage, regions in stages.items():
+        region_variances: dict[int, float] = {}
+        for region_id, subject_values in regions.items():
+            if len(subject_values) < 2:
+                continue
+            aligned = torch.stack(subject_values).float()
+            region_variances[region_id] = aligned.var(
+                dim=0, unbiased=False
+            ).mean().item()
+        per_region_variances[stage] = region_variances
+        prefix = f"region_{stage}_cross_subject_variance"
+        if region_variances:
+            values = torch.tensor(list(region_variances.values()))
+            metrics.update(
+                {
+                    f"{prefix}_mean": values.mean().item(),
+                    f"{prefix}_median": values.quantile(0.5).item(),
+                    f"{prefix}_min": values.min().item(),
+                    f"{prefix}_max": values.max().item(),
+                    f"{prefix}_near_zero_fraction": (
+                        values <= near_zero_threshold
+                    ).float().mean().item(),
+                }
+            )
+        else:
+            metrics.update(
+                {
+                    f"{prefix}_{name}": float("nan")
+                    for name in (
+                        "mean",
+                        "median",
+                        "min",
+                        "max",
+                        "near_zero_fraction",
+                    )
+                }
+            )
+
+    projection = stages.get("projection", {})
+    position = stages.get("position", {})
+    post_position = stages.get("post_position", {})
+    feature_norms: list[torch.Tensor] = []
+    position_norms: list[torch.Tensor] = []
+    post_position_norms: list[torch.Tensor] = []
+    ratios: list[torch.Tensor] = []
+    for region_id in projection.keys() & position.keys() & post_position.keys():
+        projected_values = projection[region_id]
+        position_values = position[region_id]
+        post_values = post_position[region_id]
+        for projected, positional, post in zip(
+            projected_values, position_values, post_values, strict=True
+        ):
+            feature_norm = projected.float().norm()
+            position_norm = positional.float().norm()
+            feature_norms.append(feature_norm)
+            position_norms.append(position_norm)
+            post_position_norms.append(post.float().norm())
+            ratios.append(position_norm / feature_norm.clamp_min(norm_epsilon))
+    if feature_norms:
+        feature_norm_tensor = torch.stack(feature_norms)
+        position_norm_tensor = torch.stack(position_norms)
+        post_norm_tensor = torch.stack(post_position_norms)
+        ratio_tensor = torch.stack(ratios)
+        metrics.update(
+            {
+                "region_projected_feature_norm_mean": feature_norm_tensor.mean().item(),
+                "region_position_norm_mean": position_norm_tensor.mean().item(),
+                "region_position_to_feature_norm_ratio": ratio_tensor.mean().item(),
+                "region_position_to_feature_norm_ratio_median": ratio_tensor.quantile(
+                    0.5
+                ).item(),
+                "region_post_position_norm_mean": post_norm_tensor.mean().item(),
+            }
+        )
+
+    temporal_variance = metrics.get(
+        "region_temporal_cross_subject_variance_mean", float("nan")
+    )
+    for stage in stages:
+        stage_variance = metrics.get(
+            f"region_{stage}_cross_subject_variance_mean", float("nan")
+        )
+        if math.isfinite(temporal_variance) and math.isfinite(stage_variance):
+            denominator = max(abs(temporal_variance), norm_epsilon)
+            metrics[f"region_{stage}_variance_retention_ratio"] = (
+                stage_variance / denominator
+            )
+        else:
+            metrics[f"region_{stage}_variance_retention_ratio"] = float("nan")
+    return metrics, per_region_variances
 
 
 @torch.no_grad()

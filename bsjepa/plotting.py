@@ -231,6 +231,192 @@ def save_extended_subject_diagnostic_plots(
     )
 
 
+def _region_stage_sort_key(stage: str) -> tuple[int, int | str]:
+    fixed_order = {
+        "raw": 0,
+        "temporal": 1,
+        "projection": 2,
+        "position": 3,
+        "post_position": 4,
+        "final": 1000,
+    }
+    if stage in fixed_order:
+        return fixed_order[stage], stage
+    if "_layer_" in stage:
+        return 5, int(stage.rsplit("_", 1)[1])
+    return 999, stage
+
+
+def save_region_stage_diagnostic_plots(
+    history: list[dict[str, float]],
+    per_region_variances: dict[str, dict[int, float]],
+    plot_dir: str | Path,
+    *,
+    epoch: int,
+    dpi: int = 150,
+    save_pdf: bool = False,
+) -> None:
+    """Save cross-subject region-stage variance and positional-norm diagnostics."""
+    if dpi < 1:
+        raise ValueError("Plot DPI must be positive")
+    path = Path(plot_dir)
+    path.mkdir(parents=True, exist_ok=True)
+    variance_suffix = "_cross_subject_variance_mean"
+    stage_keys = {
+        key.removeprefix("region_").removesuffix(variance_suffix)
+        for row in history
+        for key in row
+        if key.startswith("region_") and key.endswith(variance_suffix)
+    }
+    stages = sorted(stage_keys, key=_region_stage_sort_key)
+    diagnostic_rows = [
+        row
+        for row in history
+        if any(f"region_{stage}{variance_suffix}" in row for stage in stages)
+    ]
+    if diagnostic_rows and stages:
+        plt.figure(figsize=(9, 5))
+        epochs = [row["epoch"] for row in diagnostic_rows]
+        for stage in stages:
+            plt.plot(
+                epochs,
+                [
+                    row.get(f"region_{stage}{variance_suffix}", float("nan"))
+                    for row in diagnostic_rows
+                ],
+                marker="o",
+                label=stage.replace("_", " "),
+            )
+        plt.xlabel("Epoch")
+        plt.ylabel("Mean same-region variance")
+        plt.title("Cross-Subject Variance by Encoder Stage")
+        plt.grid(alpha=0.3)
+        plt.legend(fontsize="small", ncol=2)
+        _save_figure(
+            path / "region_stage_cross_subject_variance.png",
+            dpi=dpi,
+            save_pdf=save_pdf,
+        )
+
+    current_stages = sorted(per_region_variances, key=_region_stage_sort_key)
+    region_ids = sorted(
+        {
+            region_id
+            for values in per_region_variances.values()
+            for region_id in values
+        }
+    )
+    if current_stages and region_ids:
+        matrix = np.full((len(current_stages), len(region_ids)), np.nan)
+        region_positions = {region_id: index for index, region_id in enumerate(region_ids)}
+        for stage_index, stage in enumerate(current_stages):
+            for region_id, value in per_region_variances[stage].items():
+                matrix[stage_index, region_positions[region_id]] = value
+        plt.figure(figsize=(max(9, len(region_ids) * 0.04), 5))
+        image = plt.imshow(matrix, cmap="viridis", aspect="auto")
+        plt.colorbar(image, label="Mean feature-wise variance")
+        step = max(1, int(np.ceil(len(region_ids) / 40)))
+        positions = np.arange(0, len(region_ids), step)
+        plt.xticks(
+            positions,
+            [str(region_ids[index]) for index in positions],
+            rotation=90,
+            fontsize=7,
+        )
+        plt.yticks(
+            np.arange(len(current_stages)),
+            [stage.replace("_", " ") for stage in current_stages],
+        )
+        plt.xlabel("Atlas region ID")
+        plt.ylabel("Encoder stage")
+        plt.title(f"Same-Region Cross-Subject Variance (Epoch {epoch})")
+        _save_figure(
+            path / "region_stage_per_region_variance_heatmap.png",
+            dpi=dpi,
+            save_pdf=save_pdf,
+        )
+
+    norm_rows = [
+        row for row in history if "region_projected_feature_norm_mean" in row
+    ]
+    if norm_rows:
+        epochs = [row["epoch"] for row in norm_rows]
+        plt.figure(figsize=(7, 4))
+        for key, label in (
+            ("region_projected_feature_norm_mean", "Projected feature"),
+            ("region_position_norm_mean", "Position"),
+            ("region_post_position_norm_mean", "After addition"),
+        ):
+            plt.plot(epochs, [row[key] for row in norm_rows], marker="o", label=label)
+        plt.xlabel("Epoch")
+        plt.ylabel("Mean node norm")
+        plt.title("Feature and Atlas-Position Norms")
+        plt.grid(alpha=0.3)
+        plt.legend()
+        _save_figure(
+            path / "region_stage_feature_position_norms.png",
+            dpi=dpi,
+            save_pdf=save_pdf,
+        )
+
+        plt.figure(figsize=(7, 4))
+        plt.plot(
+            epochs,
+            [row["region_position_to_feature_norm_ratio"] for row in norm_rows],
+            marker="o",
+        )
+        plt.axhline(1, color="black", linestyle="--", alpha=0.5)
+        plt.xlabel("Epoch")
+        plt.ylabel("Position norm / projected-feature norm")
+        plt.title("Atlas-Position Dominance Ratio")
+        plt.grid(alpha=0.3)
+        _save_figure(
+            path / "region_stage_position_feature_ratio.png",
+            dpi=dpi,
+            save_pdf=save_pdf,
+        )
+
+    retention_suffix = "_variance_retention_ratio"
+    retention_stages = sorted(
+        {
+            key.removeprefix("region_").removesuffix(retention_suffix)
+            for row in history
+            for key in row
+            if key.startswith("region_") and key.endswith(retention_suffix)
+        },
+        key=_region_stage_sort_key,
+    )
+    retention_rows = [
+        row
+        for row in history
+        if any(f"region_{stage}{retention_suffix}" in row for stage in retention_stages)
+    ]
+    if retention_rows and retention_stages:
+        epochs = [row["epoch"] for row in retention_rows]
+        plt.figure(figsize=(9, 5))
+        for stage in retention_stages:
+            plt.plot(
+                epochs,
+                [
+                    row.get(f"region_{stage}{retention_suffix}", float("nan"))
+                    for row in retention_rows
+                ],
+                marker="o",
+                label=stage.replace("_", " "),
+            )
+        plt.axhline(1, color="black", linestyle="--", alpha=0.5)
+        plt.xlabel("Epoch")
+        plt.ylabel("Variance / temporal-feature variance")
+        plt.title("Layer-Wise Cross-Subject Variance Retention")
+        plt.grid(alpha=0.3)
+        plt.legend(fontsize="small", ncol=2)
+        _save_figure(
+            path / "region_stage_variance_retention.png",
+            dpi=dpi,
+            save_pdf=save_pdf,
+        )
+
+
 def _save_training_plots(
     history: list[dict[str, float]],
     plot_dir: str | Path,
