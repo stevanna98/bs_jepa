@@ -10,7 +10,7 @@ from bsjepa.evaluation import (
     standardized_euclidean_diagnostics,
     subject_variance_rank_diagnostics,
 )
-from bsjepa.plotting import save_extended_subject_diagnostic_plots
+from bsjepa.plotting import save_extended_subject_diagnostic_plots, save_training_plots
 
 
 def test_cohort_centering_and_zero_norm_rows() -> None:
@@ -171,3 +171,15 @@ def test_single_subject_diagnostics() -> None:
     assert rank_metrics["subject_effective_rank"] == 0
     assert all(math.isnan(value) for value in centered_metrics.values())
     assert all(math.isnan(value) for value in distance_metrics.values())
+
+
+def test_effective_rank_history_plot_tracks_available_epochs(tmp_path) -> None:
+    history = [
+        {"epoch": 1.0, "loss": 1.0, "subject_effective_rank": 2.0},
+        {"epoch": 2.0, "loss": 0.8},
+        {"epoch": 3.0, "loss": 0.6, "subject_effective_rank": 3.5},
+    ]
+
+    save_training_plots(history, tmp_path)
+
+    assert (tmp_path / "subject_effective_rank_over_time.png").is_file()

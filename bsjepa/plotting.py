@@ -327,6 +327,24 @@ def _save_training_plots(
         plt.legend(fontsize="small")
         _save_figure(path / filename, dpi=dpi, save_pdf=save_pdf)
 
+    rank_rows = [row for row in history if "subject_effective_rank" in row]
+    if rank_rows:
+        plt.figure(figsize=(7, 4))
+        plt.plot(
+            [row["epoch"] for row in rank_rows],
+            [row["subject_effective_rank"] for row in rank_rows],
+            marker="o",
+        )
+        plt.xlabel("Pretraining epoch")
+        plt.ylabel("Effective rank")
+        plt.title("EMA Subject-Embedding Effective Rank")
+        plt.grid(alpha=0.3)
+        _save_figure(
+            path / "subject_effective_rank_over_time.png",
+            dpi=dpi,
+            save_pdf=save_pdf,
+        )
+
     downstream_rows = [row for row in history if "pmat_val_mae" in row]
     if downstream_rows:
         evaluation_epochs = [row["epoch"] for row in downstream_rows]
