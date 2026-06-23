@@ -9,12 +9,18 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.data import Batch, Data
-from torch_geometric.nn import GATv2Conv, GCNConv
+from torch_geometric.nn import (
+    GATv2Conv,
+    GCNConv,
+    GINEConv,
+    SAGEConv,
+    TransformerConv,
+)
 from torch_geometric.utils import unbatch
 
 from .masking import MaskOutput, extract_subgraph
 
-GraphLayer = Literal["gcn", "gat"]
+GraphLayer = Literal["gcn", "gat", "graphsage", "transformer", "gine"]
 FeatureMode = Literal["passthrough", "conv1d"]
 
 
@@ -52,7 +58,7 @@ class TemporalConv(nn.Module):
 
 
 class GraphNetwork(nn.Module):
-    """GCN/GATv2 node network used as either encoder or predictor."""
+    """Graph node network used as either encoder or predictor."""
 
     def __init__(
         self,
@@ -72,7 +78,7 @@ class GraphNetwork(nn.Module):
         super().__init__()
         if num_layers < 1:
             raise ValueError("num_layers must be positive")
-        if kind not in ("gcn", "gat"):
+        if kind not in ("gcn", "gat", "graphsage", "transformer", "gine"):
             raise ValueError(f"Unsupported graph layer: {kind}")
         if feature_mode not in ("passthrough", "conv1d"):
             raise ValueError(f"Unsupported feature mode: {feature_mode}")
@@ -95,7 +101,7 @@ class GraphNetwork(nn.Module):
                 GCNConv(dimensions[i], dimensions[i + 1], add_self_loops=True)
                 for i in range(num_layers)
             )
-        else:
+        elif kind == "gat":
             self.layers = nn.ModuleList(
                 GATv2Conv(
                     dimensions[i], dimensions[i + 1], heads=heads, concat=False,
@@ -103,9 +109,51 @@ class GraphNetwork(nn.Module):
                 )
                 for i in range(num_layers)
             )
+        elif kind == "graphsage":
+            self.layers = nn.ModuleList(
+                SAGEConv(dimensions[i], dimensions[i + 1])
+                for i in range(num_layers)
+            )
+        elif kind == "transformer":
+            self.layers = nn.ModuleList(
+                TransformerConv(
+                    dimensions[i], dimensions[i + 1], heads=heads, concat=False,
+                    dropout=dropout, edge_dim=1,
+                )
+                for i in range(num_layers)
+            )
+        else:
+            self.layers = nn.ModuleList(
+                GINEConv(
+                    nn.Sequential(
+                        nn.Linear(dimensions[i], dimensions[i + 1]),
+                        nn.GELU(),
+                        nn.Linear(dimensions[i + 1], dimensions[i + 1]),
+                    ),
+                    edge_dim=1,
+                )
+                for i in range(num_layers)
+            )
         self.norms = nn.ModuleList(
             nn.LayerNorm(dimensions[i + 1]) for i in range(num_layers)
         )
+
+    def _edge_attr_or_ones(self, data: Data, x: torch.Tensor) -> torch.Tensor:
+        if data.edge_attr is not None:
+            return data.edge_attr
+        return torch.ones(data.edge_index.shape[1], 1, device=x.device, dtype=x.dtype)
+
+    def _apply_layer(self, layer: nn.Module, x: torch.Tensor, data: Data) -> torch.Tensor:
+        if self.kind == "gcn":
+            edge_weight = (
+                data.edge_attr.squeeze(-1) if data.edge_attr is not None else None
+            )
+            return layer(x, data.edge_index, edge_weight)
+        if self.kind == "graphsage":
+            return layer(x, data.edge_index)
+        if self.kind in ("gat", "transformer", "gine"):
+            return layer(x, data.edge_index, self._edge_attr_or_ones(data, x))
+        raise RuntimeError(f"Unsupported graph layer: {self.kind}")
 
     def _forward_impl(
         self, data: Data, *, collect_diagnostics: bool
@@ -135,13 +183,8 @@ class GraphNetwork(nn.Module):
                 }
             )
 
-        edge_weight = data.edge_attr.squeeze(-1) if data.edge_attr is not None else None
         for index, (layer, norm) in enumerate(zip(self.layers, self.norms, strict=True)):
-            x = (
-                layer(x, data.edge_index, edge_weight)
-                if self.kind == "gcn"
-                else layer(x, data.edge_index, data.edge_attr)
-            )
+            x = self._apply_layer(layer, x, data)
             x = norm(x)
             if activations is not None:
                 activations[f"{self.kind}_layer_{index}"] = x.detach()

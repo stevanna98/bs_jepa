@@ -17,6 +17,9 @@ The default configuration runs a small synthetic pretraining job and writes chec
 python pretrain.py --set training.epochs=10 --set model.encoder_type=gat
 ```
 
+Graph encoder and predictor layer options are `gcn`, `gat`, `graphsage`,
+`transformer`, and `gine`.
+
 For real data, set `data.source` to either a `.pkl`/`.pt` dictionary of subjects or a directory containing one `.pt`/`.npz` file per subject, and set `data.atlas_csv`. Subject records must provide BOLD and/or FC arrays using the configured keys. The atlas CSV must contain `rsn_id` and `rsn_name` columns, with one row per region.
 
 When training from raw BOLD, set `model.feature_mode: conv1d` to learn temporal features in the encoder. `fc_row` and `ones` node features should use `passthrough`.
