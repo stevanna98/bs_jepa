@@ -13,6 +13,10 @@ data:
   bold_key: BOLD
   fc_key: FC
   transpose_bold: false
+  # Set bold_window_size to an integer k to use one BOLD window of k time points
+  # as node features while still constructing the graph from the full BOLD/FC.
+  bold_window_size:
+  bold_window_start: 0
   # Options: dense, top_k, absolute_threshold, positive_proportional.
   # For positive_proportional, threshold is the retained fraction of positive edges.
   graph_strategy: positive_proportional

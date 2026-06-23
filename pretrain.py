@@ -86,6 +86,8 @@ def main() -> None:
             bold_key=data_config["bold_key"],
             fc_key=data_config["fc_key"],
             transpose_bold=bool(data_config["transpose_bold"]),
+            bold_window_size=data_config.get("bold_window_size"),
+            bold_window_start=int(data_config.get("bold_window_start", 0)),
             graph_strategy=data_config["graph_strategy"],
             top_k=int(data_config["top_k"]),
             threshold=float(data_config["threshold"]),

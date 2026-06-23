@@ -23,3 +23,7 @@ Graph encoder and predictor layer options are `gcn`, `gat`, `graphsage`,
 For real data, set `data.source` to either a `.pkl`/`.pt` dictionary of subjects or a directory containing one `.pt`/`.npz` file per subject, and set `data.atlas_csv`. Subject records must provide BOLD and/or FC arrays using the configured keys. The atlas CSV must contain `rsn_id` and `rsn_name` columns, with one row per region.
 
 When training from raw BOLD, set `model.feature_mode: conv1d` to learn temporal features in the encoder. `fc_row` and `ones` node features should use `passthrough`.
+
+To use a single BOLD window as node features while keeping the graph built from
+the full BOLD/FC signal, set `data.bold_window_size` to the number of time
+points and `data.bold_window_start` to the starting index.

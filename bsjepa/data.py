@@ -147,6 +147,29 @@ def _validate_bold_shape(bold: torch.Tensor, expected_regions: int, subject: Any
         )
 
 
+def _select_bold_window(
+    bold: torch.Tensor,
+    *,
+    window_size: int | None,
+    window_start: int,
+    subject: Any,
+) -> torch.Tensor:
+    if window_size is None:
+        return bold
+    if window_size < 1:
+        raise ValueError("BOLD window size must be positive")
+    if window_start < 0:
+        raise ValueError("BOLD window start must be non-negative")
+    timepoints = bold.shape[1]
+    window_end = window_start + window_size
+    if window_end > timepoints:
+        raise ValueError(
+            f"Subject {subject!s} has {timepoints} BOLD time points; requested "
+            f"window [{window_start}, {window_end})"
+        )
+    return bold[:, window_start:window_end]
+
+
 def _load_file(path: Path) -> Any:
     if path.suffix == ".pkl":
         with path.open("rb") as handle:
@@ -171,6 +194,8 @@ class BrainGraphDataset(Dataset[Data]):
         bold_key: str = "BOLD",
         fc_key: str = "FC",
         transpose_bold: bool = False,
+        bold_window_size: int | None = None,
+        bold_window_start: int = 0,
         graph_strategy: GraphStrategy = "top_k",
         top_k: int = 10,
         threshold: float = 0.2,
@@ -180,6 +205,8 @@ class BrainGraphDataset(Dataset[Data]):
         self.bold_key = bold_key
         self.fc_key = fc_key
         self.transpose_bold = transpose_bold
+        self.bold_window_size = bold_window_size
+        self.bold_window_start = bold_window_start
         self.graph_strategy = graph_strategy
         self.top_k = top_k
         self.threshold = threshold
@@ -252,7 +279,13 @@ class BrainGraphDataset(Dataset[Data]):
         if self.node_features == "bold":
             if bold is None:
                 raise KeyError(f"Subject {key!s} has no BOLD data")
-            graph.x = _zscore(bold)
+            bold_features = _select_bold_window(
+                bold,
+                window_size=self.bold_window_size,
+                window_start=self.bold_window_start,
+                subject=key,
+            )
+            graph.x = _zscore(bold_features)
         elif self.node_features == "fc_row":
             graph.x = fc
         elif self.node_features == "ones":
