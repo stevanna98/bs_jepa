@@ -1,13 +1,10 @@
 seed: 42
-# output_dir: /content/drive/MyDrive/IMPERIAL/bs_jepa/
-output_dir: /content/drive/MyDrive/IMPERIAL/IMPERIAL/bs_jepa/
+output_dir: /content/drive/MyDrive/IMPERIAL/bs_jepa/
 
 data:
   # Use "synthetic", a subject dictionary (.pkl/.pt), or a directory of .pt/.npz files.
-  # source: /content/drive/MyDrive/IMPERIAL/data/subject_data_1_cleaned_precise_age.pkl
-  source: /content/drive/MyDrive/IMPERIAL/IMPERIAL/data/subject_data_1_cleaned_precise_age.pkl
-  # atlas_csv: /content/drive/MyDrive/IMPERIAL/data/glasser379_to_rsn12.csv
-  atlas_csv: /content/drive/MyDrive/IMPERIAL/IMPERIAL/data/glasser379_to_rsn12.csv
+  source: /content/drive/MyDrive/IMPERIAL/data/subject_data_1_cleaned_precise_age.pkl
+  atlas_csv: /content/drive/MyDrive/IMPERIAL/data/glasser379_to_rsn12.csv
   num_subjects: 16
   num_regions: 40
   num_rsns: 8
@@ -85,8 +82,7 @@ training:
 
 evaluation:
   enabled: false
-  # pmat_csv: /content/drive/MyDrive/IMPERIAL/data/HCP_YA_subjects_2026_04_02_12_52_45.csv
-  pmat_csv: /content/drive/MyDrive/IMPERIAL/IMPERIAL/data/HCP_YA_subjects_2026_04_02_12_52_45.csv
+  pmat_csv: /content/drive/MyDrive/IMPERIAL/data/HCP_YA_subjects_2026_04_02_12_52_45.csv
   label_column: PMAT24_A_CR
   subject_column: Subject
   heldout_size: 64
