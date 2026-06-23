@@ -562,31 +562,55 @@ def _save_training_plots(
     gender_rows = [row for row in history if "gender_probe_val_accuracy" in row]
     if gender_rows:
         probe_epochs = [row["epoch"] for row in gender_rows]
-        figure, axes = plt.subplots(2, 1, figsize=(8, 7), sharex=True)
-        axes[0].plot(
-            probe_epochs,
-            [row["gender_probe_val_accuracy"] for row in gender_rows],
-            label="Accuracy",
+        figure, axes = plt.subplots(3, 1, figsize=(9, 9), sharex=True)
+        comparisons = (
+            ("gender_majority", "Majority class", "--", "tab:blue"),
+            ("gender_raw_adjacency", "Raw adjacency linear", "-.", "tab:orange"),
+            ("gender_random_encoder", "Random encoder linear", ":", "tab:green"),
+            ("gender_probe", "Trained BS-JEPA linear", "-", "tab:red"),
         )
-        axes[0].plot(
-            probe_epochs,
-            [row["gender_probe_val_balanced_accuracy"] for row in gender_rows],
-            label="Balanced accuracy",
-        )
-        axes[0].set_ylabel("Validation score")
-        axes[0].set_ylim(0, 1)
-        axes[0].grid(alpha=0.3)
-        axes[0].legend()
-        axes[1].plot(
-            probe_epochs,
-            [row["gender_probe_val_loss"] for row in gender_rows],
-            label="Cross-entropy loss",
-        )
-        axes[1].set_xlabel("Pretraining epoch")
-        axes[1].set_ylabel("Validation loss")
-        axes[1].grid(alpha=0.3)
-        axes[1].legend()
-        figure.suptitle("Frozen Target Encoder Gender Probe")
+        for prefix, label, linestyle, color in comparisons:
+            accuracy_key = f"{prefix}_val_accuracy"
+            if accuracy_key in gender_rows[0]:
+                axes[0].plot(
+                    probe_epochs,
+                    [row[accuracy_key] for row in gender_rows],
+                    label=label,
+                    linestyle=linestyle,
+                    marker="o",
+                    color=color,
+                )
+            balanced_key = f"{prefix}_val_balanced_accuracy"
+            if balanced_key in gender_rows[0]:
+                axes[1].plot(
+                    probe_epochs,
+                    [row[balanced_key] for row in gender_rows],
+                    label=label,
+                    linestyle=linestyle,
+                    marker="o",
+                    color=color,
+                )
+            loss_key = f"{prefix}_val_loss"
+            if loss_key in gender_rows[0]:
+                axes[2].plot(
+                    probe_epochs,
+                    [row[loss_key] for row in gender_rows],
+                    label=label,
+                    linestyle=linestyle,
+                    marker="o",
+                    color=color,
+                )
+        axes[0].set_ylabel("Accuracy")
+        axes[1].set_ylabel("Balanced accuracy")
+        for axis in axes[:2]:
+            axis.set_ylim(0, 1)
+            axis.grid(alpha=0.3)
+            axis.legend()
+        axes[2].set_xlabel("Pretraining epoch")
+        axes[2].set_ylabel("Validation loss")
+        axes[2].grid(alpha=0.3)
+        axes[2].legend()
+        figure.suptitle("Gender Probe Baseline Comparison")
         _save_figure(path / "gender_probe_metrics.png", dpi=dpi, save_pdf=save_pdf)
 
 

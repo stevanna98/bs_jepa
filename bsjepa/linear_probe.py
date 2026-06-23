@@ -152,14 +152,126 @@ def _stratified_probe_indices(
     return torch.tensor(training, dtype=torch.long), torch.tensor(validation, dtype=torch.long)
 
 
+def _classification_metrics(
+    logits: torch.Tensor, labels: torch.Tensor, *, prefix: str
+) -> dict[str, float]:
+    validation_loss = F.cross_entropy(logits, labels)
+    predictions = logits.argmax(dim=-1)
+    accuracy = (predictions == labels).float().mean()
+    recalls = torch.stack(
+        [
+            (predictions[labels == label] == label).float().mean()
+            for label in (0, 1)
+        ]
+    )
+    return {
+        f"{prefix}_val_accuracy": accuracy.item(),
+        f"{prefix}_val_balanced_accuracy": recalls.mean().item(),
+        f"{prefix}_val_loss": validation_loss.item(),
+    }
+
+
+def _fit_linear_classifier(
+    features: torch.Tensor,
+    labels: torch.Tensor,
+    train_indices: torch.Tensor,
+    validation_indices: torch.Tensor,
+    *,
+    prefix: str,
+    batch_size: int,
+    epochs: int,
+    lr: float,
+    weight_decay: float,
+    seed: int,
+) -> dict[str, float]:
+    train_x, train_y = features[train_indices], labels[train_indices]
+    validation_x, validation_y = features[validation_indices], labels[validation_indices]
+
+    with torch.random.fork_rng():
+        torch.manual_seed(seed)
+        classifier = nn.Sequential(
+            nn.LayerNorm(features.shape[1]), nn.Linear(features.shape[1], 2)
+        )
+    optimizer = torch.optim.AdamW(
+        classifier.parameters(), lr=lr, weight_decay=weight_decay
+    )
+    generator = torch.Generator().manual_seed(seed)
+    classifier.train()
+    for _ in range(epochs):
+        for indices in torch.randperm(len(train_x), generator=generator).split(
+            batch_size
+        ):
+            optimizer.zero_grad(set_to_none=True)
+            logits = classifier(train_x[indices])
+            loss = F.cross_entropy(logits, train_y[indices])
+            loss.backward()
+            optimizer.step()
+
+    classifier.eval()
+    with torch.no_grad():
+        return _classification_metrics(
+            classifier(validation_x), validation_y, prefix=prefix
+        )
+
+
+def _majority_class_baseline(
+    labels: torch.Tensor, validation_indices: torch.Tensor
+) -> dict[str, float]:
+    validation_y = labels[validation_indices]
+    counts = torch.bincount(validation_y, minlength=2)
+    majority_class = int(counts.argmax())
+    predictions = torch.full_like(validation_y, majority_class)
+    accuracy = (predictions == validation_y).float().mean()
+    recalls = torch.stack(
+        [
+            (predictions[validation_y == label] == label).float().mean()
+            for label in (0, 1)
+        ]
+    )
+    return {
+        "gender_majority_val_accuracy": accuracy.item(),
+        "gender_majority_val_balanced_accuracy": recalls.mean().item(),
+    }
+
+
+@torch.no_grad()
+def _extract_adjacency_features(dataset: LabeledGraphDataset) -> torch.Tensor:
+    features: list[torch.Tensor] = []
+    expected_nodes: int | None = None
+    upper_indices: tuple[torch.Tensor, torch.Tensor] | None = None
+    for index in range(len(dataset)):
+        graph, _ = dataset[index]
+        node_count = int(graph.num_nodes)
+        if expected_nodes is None:
+            expected_nodes = node_count
+            upper_indices = torch.triu_indices(node_count, node_count, offset=1)
+        elif node_count != expected_nodes:
+            raise ValueError("Raw adjacency baseline requires a fixed node count")
+        if upper_indices is None:
+            raise RuntimeError("Adjacency feature indices were not initialized")
+        adjacency = torch.zeros(node_count, node_count, dtype=torch.float32)
+        edge_values = (
+            graph.edge_attr.detach().cpu().float().view(-1)
+            if graph.edge_attr is not None
+            else torch.ones(graph.edge_index.shape[1], dtype=torch.float32)
+        )
+        edge_index = graph.edge_index.detach().cpu()
+        adjacency[edge_index[0], edge_index[1]] = edge_values
+        features.append(adjacency[upper_indices[0], upper_indices[1]])
+    if not features:
+        raise ValueError("Raw adjacency baseline requires at least one graph")
+    return torch.stack(features)
+
+
 def evaluate_gender_probe(
     model: BSJEPA,
     dataset: LabeledGraphDataset,
     config: dict[str, Any],
     *,
     device: torch.device,
+    random_model: BSJEPA | None = None,
 ) -> dict[str, float]:
-    """Train a fresh linear gender probe on frozen target-encoder embeddings."""
+    """Train fresh gender probes and simple baselines on the same held-out split."""
     batch_size = int(config.get("batch_size", 32))
     probe_epochs = int(config["probe_epochs"])
     probe_lr = float(config["probe_lr"])
@@ -172,48 +284,56 @@ def evaluate_gender_probe(
     train_indices, validation_indices = _stratified_probe_indices(
         labels, float(config.get("probe_train_fraction", 0.7)), seed
     )
-    train_x, train_y = embeddings[train_indices], labels[train_indices]
-    validation_x, validation_y = (
-        embeddings[validation_indices],
-        labels[validation_indices],
-    )
-
-    with torch.random.fork_rng():
-        torch.manual_seed(seed)
-        classifier = nn.Sequential(
-            nn.LayerNorm(embeddings.shape[1]), nn.Linear(embeddings.shape[1], 2)
-        )
-    optimizer = torch.optim.AdamW(
-        classifier.parameters(),
+    weight_decay = float(config.get("probe_weight_decay", 0.0))
+    metrics = _fit_linear_classifier(
+        embeddings,
+        labels,
+        train_indices,
+        validation_indices,
+        prefix="gender_probe",
+        batch_size=batch_size,
+        epochs=probe_epochs,
         lr=probe_lr,
-        weight_decay=float(config.get("probe_weight_decay", 0.0)),
+        weight_decay=weight_decay,
+        seed=seed,
     )
-    generator = torch.Generator().manual_seed(seed)
-    classifier.train()
-    for _ in range(probe_epochs):
-        for indices in torch.randperm(len(train_x), generator=generator).split(
-            batch_size
-        ):
-            optimizer.zero_grad(set_to_none=True)
-            logits = classifier(train_x[indices])
-            loss = F.cross_entropy(logits, train_y[indices])
-            loss.backward()
-            optimizer.step()
 
-    classifier.eval()
-    with torch.no_grad():
-        logits = classifier(validation_x)
-        validation_loss = F.cross_entropy(logits, validation_y)
-        predictions = logits.argmax(dim=-1)
-        accuracy = (predictions == validation_y).float().mean()
-        recalls = torch.stack(
-            [
-                (predictions[validation_y == label] == label).float().mean()
-                for label in (0, 1)
-            ]
+    if bool(config.get("compare_baselines", True)):
+        metrics.update(_majority_class_baseline(labels, validation_indices))
+        raw_features = _extract_adjacency_features(dataset)
+        metrics.update(
+            _fit_linear_classifier(
+                raw_features,
+                labels,
+                train_indices,
+                validation_indices,
+                prefix="gender_raw_adjacency",
+                batch_size=batch_size,
+                epochs=probe_epochs,
+                lr=probe_lr,
+                weight_decay=weight_decay,
+                seed=seed,
+            )
         )
-    return {
-        "gender_probe_val_accuracy": accuracy.item(),
-        "gender_probe_val_balanced_accuracy": recalls.mean().item(),
-        "gender_probe_val_loss": validation_loss.item(),
-    }
+        if random_model is not None:
+            random_model.to(device)
+            random_embeddings, random_labels = extract_graph_embeddings(
+                random_model, dataset, device=device, batch_size=batch_size
+            )
+            if not torch.equal(random_labels, labels):
+                raise ValueError("Random encoder labels do not match probe labels")
+            metrics.update(
+                _fit_linear_classifier(
+                    random_embeddings,
+                    labels,
+                    train_indices,
+                    validation_indices,
+                    prefix="gender_random_encoder",
+                    batch_size=batch_size,
+                    epochs=probe_epochs,
+                    lr=probe_lr,
+                    weight_decay=weight_decay,
+                    seed=seed,
+                )
+            )
+    return metrics

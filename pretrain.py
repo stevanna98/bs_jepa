@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import random
 from pathlib import Path
 from typing import Any
@@ -129,6 +130,12 @@ def main() -> None:
         num_regions=atlas.num_regions,
         **model_config,
     )
+    random_probe_model = (
+        copy.deepcopy(model)
+        if linear_probe_dataset is not None
+        and bool(linear_probe_config.get("compare_baselines", True))
+        else None
+    )
     collator = SubnetworkMaskCollator(
         atlas.num_rsns, int(config["masking"]["num_targets"])
     )
@@ -149,6 +156,7 @@ def main() -> None:
         linear_probe_config=(
             linear_probe_config if linear_probe_dataset is not None else None
         ),
+        random_probe_model=random_probe_model,
     )
     if bool(config["training"].get("save_final_artifact", True)):
         from bsjepa.artifacts import export_final_artifact

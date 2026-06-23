@@ -99,6 +99,7 @@ evaluation:
 
 linear_probe:
   enabled: true
+  compare_baselines: true
   task: gender
   metadata_key: gender
   family_key: Family_ID

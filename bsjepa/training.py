@@ -75,6 +75,7 @@ def pretrain(
     evaluation_config: dict[str, Any] | None = None,
     linear_probe_dataset: LabeledGraphDataset | None = None,
     linear_probe_config: dict[str, Any] | None = None,
+    random_probe_model: BSJEPA | None = None,
 ) -> list[dict[str, float]]:
     """Run BS-JEPA pretraining and write checkpoints and diagnostic plots."""
     epochs = int(config["epochs"])
@@ -366,6 +367,7 @@ def pretrain(
                     linear_probe_dataset,
                     linear_probe_config,
                     device=device,
+                    random_model=random_probe_model,
                 )
             )
             downstream_evaluated = True
