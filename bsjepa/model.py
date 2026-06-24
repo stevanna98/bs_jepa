@@ -22,8 +22,10 @@ from .masking import MaskOutput, extract_subgraph
 
 GraphLayer = Literal["gcn", "gat", "graphsage", "transformer", "gine"]
 FeatureMode = Literal["passthrough", "conv1d"]
+MaskTokenMode = Literal["shared", "random_per_target_node", "rsn_specific", "zero"]
 SUPPORTED_GRAPH_LAYERS = ("gcn", "gat", "graphsage", "transformer", "gine")
 SUPPORTED_FEATURE_MODES = ("passthrough", "conv1d")
+SUPPORTED_MASK_TOKEN_MODES = ("shared", "random_per_target_node", "rsn_specific", "zero")
 
 
 class TemporalConv(nn.Module):
@@ -227,19 +229,69 @@ class GraphNetwork(nn.Module):
 class BSJEPA(nn.Module):
     """Brain Subnetwork Joint-Embedding Predictive Architecture."""
 
-    def __init__(self, encoder: nn.Module, predictor: nn.Module, embed_dim: int) -> None:
+    def __init__(
+        self,
+        encoder: nn.Module,
+        predictor: nn.Module,
+        embed_dim: int,
+        *,
+        mask_token_mode: MaskTokenMode = "shared",
+        num_rsns: int | None = None,
+        random_mask_token_std: float = 0.02,
+    ) -> None:
         super().__init__()
+        if mask_token_mode not in SUPPORTED_MASK_TOKEN_MODES:
+            raise ValueError(f"Unsupported mask token mode: {mask_token_mode}")
+        if random_mask_token_std <= 0:
+            raise ValueError("random_mask_token_std must be positive")
+        if mask_token_mode == "rsn_specific" and (num_rsns is None or num_rsns < 1):
+            raise ValueError("rsn_specific mask tokens require a positive num_rsns")
         self.context_encoder = encoder
         self.target_encoder = copy.deepcopy(encoder)
         self.target_encoder.requires_grad_(False)
         self.predictor = predictor
-        self.mask_token = nn.Parameter(torch.empty(embed_dim))
-        nn.init.trunc_normal_(self.mask_token, std=0.02)
+        self.embed_dim = embed_dim
+        self.mask_token_mode = mask_token_mode
+        self.random_mask_token_std = random_mask_token_std
+        if mask_token_mode == "shared":
+            self.mask_token = nn.Parameter(torch.empty(embed_dim))
+            nn.init.trunc_normal_(self.mask_token, std=0.02)
+        else:
+            self.register_parameter("mask_token", None)
+        self.rsn_mask_tokens = (
+            nn.Embedding(num_rsns, embed_dim)
+            if mask_token_mode == "rsn_specific"
+            else None
+        )
+        if self.rsn_mask_tokens is not None:
+            nn.init.trunc_normal_(self.rsn_mask_tokens.weight, std=0.02)
 
     def train(self, mode: bool = True) -> "BSJEPA":
         super().train(mode)
         self.target_encoder.eval()  # EMA targets must not receive dropout noise.
         return self
+
+    def _masked_node_embeddings(self, graph: Data, reference: torch.Tensor) -> torch.Tensor:
+        if self.mask_token_mode == "shared":
+            if self.mask_token is None:
+                raise RuntimeError("Shared mask token was not initialized")
+            return self.mask_token.expand(graph.num_nodes, -1).clone()
+        if self.mask_token_mode == "zero":
+            return reference.new_zeros((graph.num_nodes, self.embed_dim))
+        if self.mask_token_mode == "random_per_target_node":
+            return reference.new_empty((graph.num_nodes, self.embed_dim)).normal_(
+                mean=0.0,
+                std=self.random_mask_token_std,
+            )
+        if self.mask_token_mode == "rsn_specific":
+            if self.rsn_mask_tokens is None:
+                raise RuntimeError("RSN-specific mask token table was not initialized")
+            rsn_ids = getattr(graph, "rsn_ids", None)
+            if rsn_ids is None:
+                raise TypeError("rsn_specific mask tokens require graph.rsn_ids")
+            rsn_ids = torch.as_tensor(rsn_ids, device=reference.device, dtype=torch.long)
+            return self.rsn_mask_tokens(rsn_ids)
+        raise RuntimeError(f"Unsupported mask token mode: {self.mask_token_mode}")
 
     def forward(
         self, batch: Batch, masks: MaskOutput, *, return_groups: bool = False
@@ -266,7 +318,9 @@ class BSJEPA(nn.Module):
         for subject, graph in enumerate(graphs):
             context_mask = masks.context_node_masks[subject]
             context_ids = context_mask.nonzero(as_tuple=True)[0]
-            node_embeddings = self.mask_token.expand(graph.num_nodes, -1).clone()
+            node_embeddings = self._masked_node_embeddings(
+                graph, context_per_graph[subject]
+            )
             node_embeddings = node_embeddings.index_copy(
                 0, context_ids, context_per_graph[subject]
             )
@@ -316,6 +370,7 @@ def build_bsjepa(
     *,
     in_channels: int,
     num_regions: int,
+    num_rsns: int | None = None,
     embed_dim: int,
     encoder_type: GraphLayer = "gcn",
     encoder_hidden: int = 256,
@@ -331,8 +386,12 @@ def build_bsjepa(
     predictor_heads: int = 4,
     predictor_dropout: float = 0.0,
     region_positional_encoding: bool = True,
+    mask_token_mode: MaskTokenMode = "shared",
+    random_mask_token_std: float = 0.02,
 ) -> BSJEPA:
     """Build a BS-JEPA model from explicit hyperparameters."""
+    if mask_token_mode == "rsn_specific" and num_rsns is None:
+        raise ValueError("mask_token_mode='rsn_specific' requires num_rsns")
     positional_regions = num_regions if region_positional_encoding else None
     encoder = GraphNetwork(
         in_channels, encoder_hidden, embed_dim, kind=encoder_type,
@@ -345,4 +404,11 @@ def build_bsjepa(
         num_layers=predictor_layers, heads=predictor_heads, dropout=predictor_dropout,
         num_regions=positional_regions,
     )
-    return BSJEPA(encoder, predictor, embed_dim)
+    return BSJEPA(
+        encoder,
+        predictor,
+        embed_dim,
+        mask_token_mode=mask_token_mode,
+        num_rsns=num_rsns if mask_token_mode == "rsn_specific" else None,
+        random_mask_token_std=random_mask_token_std,
+    )

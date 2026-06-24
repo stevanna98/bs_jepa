@@ -267,6 +267,7 @@ def build_model_from_context(context: AnalysisContext, checkpoint: dict[str, Any
     model = build_bsjepa(
         in_channels=context.input_feature_dim,
         num_regions=int(checkpoint.get("num_regions", context.atlas.num_regions)),
+        num_rsns=context.atlas.num_rsns,
         **context.model_config,
     )
     model.load_state_dict(checkpoint["model"])
@@ -1094,6 +1095,7 @@ def run_neurobiological_hypothesis_tests(
         random_model = build_bsjepa(
             in_channels=context.input_feature_dim,
             num_regions=context.atlas.num_regions,
+            num_rsns=context.atlas.num_rsns,
             **context.model_config,
         )
         downstream_metrics.update(

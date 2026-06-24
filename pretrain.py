@@ -130,6 +130,7 @@ def main() -> None:
     model = build_bsjepa(
         in_channels=sample.x.shape[1],
         num_regions=atlas.num_regions,
+        num_rsns=atlas.num_rsns,
         **model_config,
     )
     random_probe_model = (
