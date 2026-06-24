@@ -37,18 +37,18 @@ model:
   # Preserve this many coarse windows instead of globally pooling the time axis.
   temporal_pool_bins: 8
   # Options: gcn, gat, graphsage, transformer, gine.
-  encoder_type: gat
+  encoder_type: graphsage
   encoder_hidden: 128
   encoder_layers: 2
   encoder_heads: 4
   encoder_dropout: 0.1
   # Options: gcn, gat, graphsage, transformer, gine.
-  predictor_type: gat
+  predictor_type: graphsage
   predictor_hidden: 64
   predictor_layers: 2
   predictor_heads: 2
   predictor_dropout: 0.1
-  region_positional_encoding: true
+  region_positional_encoding: false
 
 training:
   epochs: 50
