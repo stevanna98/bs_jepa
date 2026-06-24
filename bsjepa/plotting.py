@@ -604,6 +604,44 @@ def _save_training_plots(
         figure.suptitle("Gender Probe Baseline Comparison")
         _save_figure(path / "gender_probe_metrics.png", dpi=dpi, save_pdf=save_pdf)
 
+        similarity_keys = (
+            ("gender_probe_all_embedding_cosine_mean", "All held-out"),
+            ("gender_probe_train_embedding_cosine_mean", "Probe train"),
+            ("gender_probe_val_embedding_cosine_mean", "Probe validation"),
+        )
+        if any(key in row for row in gender_rows for key, _ in similarity_keys):
+            figure, axes = plt.subplots(2, 1, figsize=(8, 6), sharex=True)
+            for key, label in similarity_keys:
+                rows = [row for row in gender_rows if key in row]
+                if rows:
+                    axes[0].plot(
+                        [row["epoch"] for row in rows],
+                        [row[key] for row in rows],
+                        label=label,
+                        marker="o",
+                    )
+                std_key = key.replace("_mean", "_std")
+                rows = [row for row in gender_rows if std_key in row]
+                if rows:
+                    axes[1].plot(
+                        [row["epoch"] for row in rows],
+                        [row[std_key] for row in rows],
+                        label=label,
+                        marker="o",
+                    )
+            axes[0].set_ylabel("Mean cosine")
+            axes[1].set_ylabel("Cosine std")
+            axes[1].set_xlabel("Pretraining epoch")
+            for axis in axes:
+                axis.grid(alpha=0.3)
+                axis.legend()
+            figure.suptitle("Gender Probe Embedding Cosine Similarity")
+            _save_figure(
+                path / "gender_probe_embedding_cosine.png",
+                dpi=dpi,
+                save_pdf=save_pdf,
+            )
+
 
 def save_training_plots(
     history: list[dict[str, float]],

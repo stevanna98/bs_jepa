@@ -16,6 +16,7 @@ from .evaluation import (
     LabeledGraphDataset,
     extract_graph_embeddings,
     normalize_subject_id,
+    subject_similarity_diagnostics,
 )
 from .model import BSJEPA
 
@@ -176,6 +177,30 @@ def _binary_recalls(predictions: torch.Tensor, labels: torch.Tensor) -> torch.Te
     )
 
 
+def _embedding_similarity_metrics(
+    embeddings: torch.Tensor,
+    train_indices: torch.Tensor,
+    validation_indices: torch.Tensor,
+) -> dict[str, float]:
+    metrics: dict[str, float] = {}
+    for split, values in (
+        ("all", embeddings),
+        ("train", embeddings[train_indices]),
+        ("val", embeddings[validation_indices]),
+    ):
+        _, _, split_metrics = subject_similarity_diagnostics(values)
+        metrics.update(
+            {
+                key.replace(
+                    "subject_cosine_similarity",
+                    f"gender_probe_{split}_embedding_cosine",
+                ): value
+                for key, value in split_metrics.items()
+            }
+        )
+    return metrics
+
+
 def _fit_linear_classifier(
     features: torch.Tensor,
     labels: torch.Tensor,
@@ -297,6 +322,9 @@ def evaluate_gender_probe(
         lr=probe_lr,
         weight_decay=weight_decay,
         seed=seed,
+    )
+    metrics.update(
+        _embedding_similarity_metrics(embeddings, train_indices, validation_indices)
     )
 
     if bool(config.get("compare_baselines", True)):
