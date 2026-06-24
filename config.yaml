@@ -82,6 +82,9 @@ training:
   region_stage_diagnostics_batch_size: 32
   region_stage_near_zero_threshold: 1.0e-8
   region_stage_norm_epsilon: 1.0e-12
+  region_network_diagnostics: true
+  region_network_diagnostics_frequency: 5
+  region_network_diagnostics_batch_size: 32
   collapse_metrics: true
   save_final_artifact: true
   artifact_name:

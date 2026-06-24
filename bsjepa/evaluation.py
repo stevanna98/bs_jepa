@@ -476,6 +476,146 @@ def region_stage_cross_subject_diagnostics(
     return metrics, per_region_variances
 
 
+def _mean_region_embeddings(
+    stage_values: dict[int, list[torch.Tensor]],
+    rsn_ids: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    embeddings: list[torch.Tensor] = []
+    labels: list[int] = []
+    for region_id, values in sorted(stage_values.items()):
+        if not 0 <= region_id < len(rsn_ids) or not values:
+            continue
+        embeddings.append(torch.stack(values).float().mean(0))
+        labels.append(int(rsn_ids[region_id]))
+    if not embeddings:
+        return torch.empty(0, 0), torch.empty(0, dtype=torch.long)
+    return torch.stack(embeddings), torch.tensor(labels, dtype=torch.long)
+
+
+def _cosine_group_separation(
+    embeddings: torch.Tensor, labels: torch.Tensor
+) -> dict[str, float]:
+    if embeddings.shape[0] < 2:
+        return {
+            "within_rsn_cosine_mean": float("nan"),
+            "between_rsn_cosine_mean": float("nan"),
+            "within_minus_between_cosine": float("nan"),
+        }
+    normalized = F.normalize(embeddings, p=2, dim=1)
+    similarity = normalized @ normalized.T
+    off_diagonal = ~torch.eye(len(labels), dtype=torch.bool)
+    same = (labels[:, None] == labels[None, :]) & off_diagonal
+    different = (labels[:, None] != labels[None, :]) & off_diagonal
+    within = similarity[same]
+    between = similarity[different]
+    within_mean = within.mean().item() if within.numel() else float("nan")
+    between_mean = between.mean().item() if between.numel() else float("nan")
+    return {
+        "within_rsn_cosine_mean": within_mean,
+        "between_rsn_cosine_mean": between_mean,
+        "within_minus_between_cosine": (
+            within_mean - between_mean
+            if math.isfinite(within_mean) and math.isfinite(between_mean)
+            else float("nan")
+        ),
+    }
+
+
+def _nearest_rsn_centroid_metrics(
+    embeddings: torch.Tensor, labels: torch.Tensor
+) -> dict[str, float]:
+    classes = labels.unique(sorted=True)
+    predictions: list[int] = []
+    targets: list[int] = []
+    for index, label in enumerate(labels):
+        centroids: list[torch.Tensor] = []
+        centroid_labels: list[int] = []
+        for rsn_id in classes:
+            mask = labels == rsn_id
+            if int(rsn_id) == int(label):
+                mask[index] = False
+            if not bool(mask.any()):
+                continue
+            centroids.append(embeddings[mask].mean(0))
+            centroid_labels.append(int(rsn_id))
+        if len(centroids) < 2 or int(label) not in centroid_labels:
+            continue
+        similarities = (
+            F.normalize(embeddings[index].unsqueeze(0), p=2, dim=1)
+            @ F.normalize(torch.stack(centroids), p=2, dim=1).T
+        ).squeeze(0)
+        predictions.append(centroid_labels[int(similarities.argmax())])
+        targets.append(int(label))
+    if not targets:
+        return {
+            "rsn_nearest_centroid_accuracy": float("nan"),
+            "rsn_nearest_centroid_balanced_accuracy": float("nan"),
+            "rsn_nearest_centroid_regions": 0.0,
+        }
+    prediction_tensor = torch.tensor(predictions)
+    target_tensor = torch.tensor(targets)
+    accuracy = (prediction_tensor == target_tensor).float().mean().item()
+    recalls = [
+        (prediction_tensor[target_tensor == rsn_id] == rsn_id).float().mean()
+        for rsn_id in target_tensor.unique(sorted=True)
+    ]
+    return {
+        "rsn_nearest_centroid_accuracy": accuracy,
+        "rsn_nearest_centroid_balanced_accuracy": torch.stack(recalls).mean().item(),
+        "rsn_nearest_centroid_regions": float(len(targets)),
+    }
+
+
+def _rsn_centroid_separation(
+    embeddings: torch.Tensor, labels: torch.Tensor
+) -> dict[str, float]:
+    centroids = torch.stack(
+        [embeddings[labels == label].mean(0) for label in labels.unique(sorted=True)]
+    )
+    if len(centroids) < 2:
+        return {"rsn_centroid_between_cosine_mean": float("nan")}
+    similarity = F.normalize(centroids, p=2, dim=1) @ F.normalize(centroids, p=2, dim=1).T
+    return {
+        "rsn_centroid_between_cosine_mean": _off_diagonal_values(similarity).mean().item()
+    }
+
+
+def region_network_structure_diagnostics(
+    stages: RegionStageActivations,
+    rsn_ids: torch.Tensor,
+) -> dict[str, float]:
+    """Measure whether region embeddings preserve RSN-distinguishable structure."""
+    metrics: dict[str, float] = {}
+    rsn_ids = rsn_ids.detach().cpu().long()
+    for stage, stage_values in stages.items():
+        embeddings, labels = _mean_region_embeddings(stage_values, rsn_ids)
+        prefix = f"region_network_{stage}"
+        if embeddings.numel() == 0:
+            metrics.update(
+                {
+                    f"{prefix}_region_count": 0.0,
+                    f"{prefix}_rsn_count": 0.0,
+                    f"{prefix}_within_rsn_cosine_mean": float("nan"),
+                    f"{prefix}_between_rsn_cosine_mean": float("nan"),
+                    f"{prefix}_within_minus_between_cosine": float("nan"),
+                    f"{prefix}_rsn_centroid_between_cosine_mean": float("nan"),
+                    f"{prefix}_rsn_nearest_centroid_accuracy": float("nan"),
+                    f"{prefix}_rsn_nearest_centroid_balanced_accuracy": float("nan"),
+                    f"{prefix}_rsn_nearest_centroid_regions": 0.0,
+                }
+            )
+            continue
+        stage_metrics = {
+            "region_count": float(len(labels)),
+            "rsn_count": float(labels.unique().numel()),
+            **_cosine_group_separation(embeddings, labels),
+            **_rsn_centroid_separation(embeddings, labels),
+            **_nearest_rsn_centroid_metrics(embeddings, labels),
+        }
+        metrics.update({f"{prefix}_{key}": value for key, value in stage_metrics.items()})
+    return metrics
+
+
 @torch.no_grad()
 def extract_graph_embeddings(
     model: BSJEPA,

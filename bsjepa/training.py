@@ -17,6 +17,7 @@ from .evaluation import (
     extract_subject_embeddings,
     extract_target_encoder_diagnostics,
     region_stage_cross_subject_diagnostics,
+    region_network_structure_diagnostics,
     standardized_euclidean_diagnostics,
     subject_similarity_diagnostics,
     subject_variance_rank_diagnostics,
@@ -134,6 +135,17 @@ def pretrain(
         raise ValueError("training.region_stage_diagnostics_batch_size must be positive")
     if region_stage_near_zero_threshold < 0 or region_stage_norm_epsilon <= 0:
         raise ValueError("Invalid region-stage diagnostic numerical threshold")
+    region_network_enabled = bool(config.get("region_network_diagnostics", False))
+    region_network_frequency = int(
+        config.get("region_network_diagnostics_frequency", region_stage_frequency)
+    )
+    region_network_batch_size = int(
+        config.get("region_network_diagnostics_batch_size", region_stage_batch_size)
+    )
+    if region_network_enabled and region_network_frequency <= 0:
+        raise ValueError("training.region_network_diagnostics_frequency must be positive")
+    if region_network_batch_size < 1:
+        raise ValueError("training.region_network_diagnostics_batch_size must be positive")
     collapse_metrics = bool(config.get("collapse_metrics", True))
     evaluation_frequency = (
         int(evaluation_config["frequency_epochs"])
@@ -254,17 +266,22 @@ def pretrain(
         region_due = region_stage_enabled and (
             epoch % region_stage_frequency == 0 or epoch == epochs
         )
+        region_network_due = region_network_enabled and (
+            epoch % region_network_frequency == 0 or epoch == epochs
+        )
         subject_embeddings = None
         subject_ids = None
         region_stages = None
-        if subject_due and region_due:
+        if subject_due and (region_due or region_network_due):
             subject_embeddings, subject_ids, region_stages = (
                 extract_target_encoder_diagnostics(
                     model,
                     loader.dataset,
                     device=device,
                     batch_size=min(
-                        subject_embedding_batch_size, region_stage_batch_size
+                        subject_embedding_batch_size,
+                        region_stage_batch_size,
+                        region_network_batch_size,
                     ),
                     collect_region_stages=True,
                 )
@@ -276,12 +293,12 @@ def pretrain(
                 device=device,
                 batch_size=subject_embedding_batch_size,
             )
-        elif region_due:
+        elif region_due or region_network_due:
             _, _, region_stages = extract_target_encoder_diagnostics(
                 model,
                 loader.dataset,
                 device=device,
-                batch_size=region_stage_batch_size,
+                batch_size=min(region_stage_batch_size, region_network_batch_size),
                 collect_region_stages=True,
             )
         if subject_due:
@@ -345,6 +362,16 @@ def pretrain(
             )
             epoch_metrics.update(region_metrics)
             region_plot_data = per_region_variances
+        if region_network_due:
+            if region_stages is None:
+                raise RuntimeError("Region-network diagnostic extraction did not return data")
+            first_graph = loader.dataset[0]
+            rsn_ids = getattr(first_graph, "rsn_ids", None)
+            if rsn_ids is None:
+                raise TypeError("Region-network diagnostics require graph.rsn_ids")
+            epoch_metrics.update(
+                region_network_structure_diagnostics(region_stages, rsn_ids)
+            )
         downstream_evaluated = False
         if evaluation_frequency > 0 and (
             epoch % evaluation_frequency == 0 or epoch == epochs
@@ -391,6 +418,7 @@ def pretrain(
             downstream_evaluated
             or plot_interval
             or region_due
+            or region_network_due
         ):
             from .plotting import (
                 save_extended_subject_diagnostic_plots,

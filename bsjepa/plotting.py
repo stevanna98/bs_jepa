@@ -504,6 +504,59 @@ def _save_training_plots(
         plt.legend(fontsize="small")
         _save_figure(path / filename, dpi=dpi, save_pdf=save_pdf)
 
+    region_network_suffixes = {
+        "region_network_within_between_gap.png": (
+            "_within_minus_between_cosine",
+            "Within-RSN cosine - between-RSN cosine",
+            "Region-Network Cosine Separation",
+        ),
+        "region_network_nearest_centroid_accuracy.png": (
+            "_rsn_nearest_centroid_balanced_accuracy",
+            "Balanced accuracy",
+            "RSN Nearest-Centroid Decoding",
+        ),
+        "region_network_centroid_similarity.png": (
+            "_rsn_centroid_between_cosine_mean",
+            "Mean between-RSN centroid cosine",
+            "RSN Centroid Similarity",
+        ),
+    }
+    for filename, (suffix, ylabel, title) in region_network_suffixes.items():
+        prefix = "region_network_"
+        stages = sorted(
+            {
+                key.removeprefix(prefix).removesuffix(suffix)
+                for row in history
+                for key in row
+                if key.startswith(prefix) and key.endswith(suffix)
+            },
+            key=_region_stage_sort_key,
+        )
+        rows = [
+            row
+            for row in history
+            if any(f"{prefix}{stage}{suffix}" in row for stage in stages)
+        ]
+        if not rows or not stages:
+            continue
+        plt.figure(figsize=(9, 5))
+        for stage in stages:
+            key = f"{prefix}{stage}{suffix}"
+            plt.plot(
+                [row["epoch"] for row in rows],
+                [row.get(key, float("nan")) for row in rows],
+                marker="o",
+                label=stage.replace("_", " "),
+            )
+        if "accuracy" in filename:
+            plt.ylim(0, 1)
+        plt.xlabel("Epoch")
+        plt.ylabel(ylabel)
+        plt.title(title)
+        plt.grid(alpha=0.3)
+        plt.legend(fontsize="small", ncol=2)
+        _save_figure(path / filename, dpi=dpi, save_pdf=save_pdf)
+
     rank_rows = [row for row in history if "subject_effective_rank" in row]
     if rank_rows:
         plt.figure(figsize=(7, 4))

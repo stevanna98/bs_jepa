@@ -10,6 +10,7 @@ from torch_geometric.data import Data
 
 from bsjepa.evaluation import (
     extract_target_encoder_diagnostics,
+    region_network_structure_diagnostics,
     region_stage_cross_subject_diagnostics,
 )
 from bsjepa.model import GraphNetwork
@@ -125,6 +126,31 @@ def test_known_feature_and_position_norms() -> None:
     assert metrics["region_post_position_norm_mean"] == pytest.approx(
         (math.sqrt(90) + 3) / 2
     )
+
+
+def test_region_network_structure_metrics_detect_rsn_separation() -> None:
+    stages = {
+        "final": {
+            0: [torch.tensor([1.0, 0.0]), torch.tensor([0.9, 0.1])],
+            1: [torch.tensor([1.0, 0.1]), torch.tensor([0.9, 0.0])],
+            2: [torch.tensor([0.0, 1.0]), torch.tensor([0.1, 0.9])],
+            3: [torch.tensor([0.1, 1.0]), torch.tensor([0.0, 0.9])],
+        }
+    }
+
+    metrics = region_network_structure_diagnostics(
+        stages, torch.tensor([0, 0, 1, 1])
+    )
+
+    assert metrics["region_network_final_region_count"] == 4
+    assert metrics["region_network_final_rsn_count"] == 2
+    assert metrics["region_network_final_within_minus_between_cosine"] > 0.8
+    assert metrics["region_network_final_rsn_nearest_centroid_accuracy"] == pytest.approx(
+        1.0
+    )
+    assert metrics[
+        "region_network_final_rsn_nearest_centroid_balanced_accuracy"
+    ] == pytest.approx(1.0)
 
 
 def test_zero_feature_norm_ratio_is_finite() -> None:
