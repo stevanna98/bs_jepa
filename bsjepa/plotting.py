@@ -46,16 +46,7 @@ def save_subject_similarity_plots(
     plt.figure(figsize=(7, 6))
     image = plt.imshow(matrix, vmin=-1, vmax=1, cmap="coolwarm", aspect="auto")
     plt.colorbar(image, label="Cosine similarity")
-    subject_count = len(subject_ids)
-    if max_tick_labels > 0 and subject_count:
-        step = max(1, int(np.ceil(subject_count / max_tick_labels)))
-        positions = np.arange(0, subject_count, step)
-        labels = [subject_ids[index] for index in positions]
-        plt.xticks(positions, labels, rotation=90, fontsize=7)
-        plt.yticks(positions, labels, fontsize=7)
-    else:
-        plt.xticks([])
-        plt.yticks([])
+    _set_subject_ticks(subject_ids, max_tick_labels)
     plt.xlabel("Subject")
     plt.ylabel("Subject")
     plt.title(f"EMA Target Subject Similarity (Epoch {epoch})")

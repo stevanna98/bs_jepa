@@ -22,6 +22,8 @@ from .masking import MaskOutput, extract_subgraph
 
 GraphLayer = Literal["gcn", "gat", "graphsage", "transformer", "gine"]
 FeatureMode = Literal["passthrough", "conv1d"]
+SUPPORTED_GRAPH_LAYERS = ("gcn", "gat", "graphsage", "transformer", "gine")
+SUPPORTED_FEATURE_MODES = ("passthrough", "conv1d")
 
 
 class TemporalConv(nn.Module):
@@ -57,6 +59,55 @@ class TemporalConv(nn.Module):
         return self.projection(pooled)
 
 
+def _build_graph_layers(
+    kind: GraphLayer,
+    dimensions: list[int],
+    *,
+    heads: int,
+    dropout: float,
+) -> nn.ModuleList:
+    num_layers = len(dimensions) - 1
+    if kind == "gcn":
+        return nn.ModuleList(
+            GCNConv(dimensions[i], dimensions[i + 1], add_self_loops=True)
+            for i in range(num_layers)
+        )
+    if kind == "gat":
+        return nn.ModuleList(
+            GATv2Conv(
+                dimensions[i], dimensions[i + 1], heads=heads, concat=False,
+                dropout=dropout, edge_dim=1, add_self_loops=True,
+            )
+            for i in range(num_layers)
+        )
+    if kind == "graphsage":
+        return nn.ModuleList(
+            SAGEConv(dimensions[i], dimensions[i + 1])
+            for i in range(num_layers)
+        )
+    if kind == "transformer":
+        return nn.ModuleList(
+            TransformerConv(
+                dimensions[i], dimensions[i + 1], heads=heads, concat=False,
+                dropout=dropout, edge_dim=1,
+            )
+            for i in range(num_layers)
+        )
+    if kind == "gine":
+        return nn.ModuleList(
+            GINEConv(
+                nn.Sequential(
+                    nn.Linear(dimensions[i], dimensions[i + 1]),
+                    nn.GELU(),
+                    nn.Linear(dimensions[i + 1], dimensions[i + 1]),
+                ),
+                edge_dim=1,
+            )
+            for i in range(num_layers)
+        )
+    raise RuntimeError(f"Unsupported graph layer: {kind}")
+
+
 class GraphNetwork(nn.Module):
     """Graph node network used as either encoder or predictor."""
 
@@ -78,9 +129,9 @@ class GraphNetwork(nn.Module):
         super().__init__()
         if num_layers < 1:
             raise ValueError("num_layers must be positive")
-        if kind not in ("gcn", "gat", "graphsage", "transformer", "gine"):
+        if kind not in SUPPORTED_GRAPH_LAYERS:
             raise ValueError(f"Unsupported graph layer: {kind}")
-        if feature_mode not in ("passthrough", "conv1d"):
+        if feature_mode not in SUPPORTED_FEATURE_MODES:
             raise ValueError(f"Unsupported feature mode: {feature_mode}")
         self.kind = kind
         self.dropout = dropout
@@ -96,44 +147,9 @@ class GraphNetwork(nn.Module):
         )
 
         dimensions = [hidden_channels] * num_layers + [out_channels]
-        if kind == "gcn":
-            self.layers = nn.ModuleList(
-                GCNConv(dimensions[i], dimensions[i + 1], add_self_loops=True)
-                for i in range(num_layers)
-            )
-        elif kind == "gat":
-            self.layers = nn.ModuleList(
-                GATv2Conv(
-                    dimensions[i], dimensions[i + 1], heads=heads, concat=False,
-                    dropout=dropout, edge_dim=1, add_self_loops=True,
-                )
-                for i in range(num_layers)
-            )
-        elif kind == "graphsage":
-            self.layers = nn.ModuleList(
-                SAGEConv(dimensions[i], dimensions[i + 1])
-                for i in range(num_layers)
-            )
-        elif kind == "transformer":
-            self.layers = nn.ModuleList(
-                TransformerConv(
-                    dimensions[i], dimensions[i + 1], heads=heads, concat=False,
-                    dropout=dropout, edge_dim=1,
-                )
-                for i in range(num_layers)
-            )
-        else:
-            self.layers = nn.ModuleList(
-                GINEConv(
-                    nn.Sequential(
-                        nn.Linear(dimensions[i], dimensions[i + 1]),
-                        nn.GELU(),
-                        nn.Linear(dimensions[i + 1], dimensions[i + 1]),
-                    ),
-                    edge_dim=1,
-                )
-                for i in range(num_layers)
-            )
+        self.layers = _build_graph_layers(
+            kind, dimensions, heads=heads, dropout=dropout
+        )
         self.norms = nn.ModuleList(
             nn.LayerNorm(dimensions[i + 1]) for i in range(num_layers)
         )

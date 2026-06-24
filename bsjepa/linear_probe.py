@@ -158,17 +158,22 @@ def _classification_metrics(
     validation_loss = F.cross_entropy(logits, labels)
     predictions = logits.argmax(dim=-1)
     accuracy = (predictions == labels).float().mean()
-    recalls = torch.stack(
+    return {
+        f"{prefix}_val_accuracy": accuracy.item(),
+        f"{prefix}_val_balanced_accuracy": _binary_recalls(
+            predictions, labels
+        ).mean().item(),
+        f"{prefix}_val_loss": validation_loss.item(),
+    }
+
+
+def _binary_recalls(predictions: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+    return torch.stack(
         [
             (predictions[labels == label] == label).float().mean()
             for label in (0, 1)
         ]
     )
-    return {
-        f"{prefix}_val_accuracy": accuracy.item(),
-        f"{prefix}_val_balanced_accuracy": recalls.mean().item(),
-        f"{prefix}_val_loss": validation_loss.item(),
-    }
 
 
 def _fit_linear_classifier(
@@ -222,15 +227,11 @@ def _majority_class_baseline(
     majority_class = int(counts.argmax())
     predictions = torch.full_like(validation_y, majority_class)
     accuracy = (predictions == validation_y).float().mean()
-    recalls = torch.stack(
-        [
-            (predictions[validation_y == label] == label).float().mean()
-            for label in (0, 1)
-        ]
-    )
     return {
         "gender_majority_val_accuracy": accuracy.item(),
-        "gender_majority_val_balanced_accuracy": recalls.mean().item(),
+        "gender_majority_val_balanced_accuracy": _binary_recalls(
+            predictions, validation_y
+        ).mean().item(),
     }
 
 

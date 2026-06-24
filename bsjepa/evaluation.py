@@ -20,6 +20,7 @@ from .model import BSJEPA
 from .data import SubjectSubset
 
 RegionStageActivations = dict[str, dict[int, list[torch.Tensor]]]
+SUBJECT_EMBEDDING_ERROR = "Subject embeddings must be a two-dimensional tensor"
 
 
 def normalize_subject_id(value: Any) -> str:
@@ -231,32 +232,10 @@ def extract_subject_embeddings(
     return embeddings, subject_ids
 
 
-def subject_similarity_diagnostics(
-    embeddings: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor, dict[str, float]]:
-    """Return pairwise cosine similarities and off-diagonal summary statistics."""
+def _subject_embeddings_as_float(embeddings: torch.Tensor) -> torch.Tensor:
     if embeddings.ndim != 2:
-        raise ValueError("Subject embeddings must be a two-dimensional tensor")
-    normalized = F.normalize(embeddings.float(), p=2, dim=1)
-    similarity = normalized @ normalized.T
-    diagonal_mask = torch.eye(
-        len(embeddings), dtype=torch.bool, device=similarity.device
-    )
-    off_diagonal = similarity[~diagonal_mask]
-    prefix = "subject_cosine_similarity"
-    if off_diagonal.numel() == 0:
-        metrics = {
-            f"{prefix}_{name}": float("nan")
-            for name in ("mean", "std", "min", "max")
-        }
-    else:
-        metrics = {
-            f"{prefix}_mean": off_diagonal.mean().item(),
-            f"{prefix}_std": off_diagonal.std(unbiased=False).item(),
-            f"{prefix}_min": off_diagonal.min().item(),
-            f"{prefix}_max": off_diagonal.max().item(),
-        }
-    return similarity, off_diagonal, metrics
+        raise ValueError(SUBJECT_EMBEDDING_ERROR)
+    return embeddings.float()
 
 
 def _off_diagonal_values(matrix: torch.Tensor) -> torch.Tensor:
@@ -280,17 +259,28 @@ def _distribution_metrics(
     }
 
 
+def subject_similarity_diagnostics(
+    embeddings: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, dict[str, float]]:
+    """Return pairwise cosine similarities and off-diagonal summary statistics."""
+    values = _subject_embeddings_as_float(embeddings)
+    normalized = F.normalize(values, p=2, dim=1)
+    similarity = normalized @ normalized.T
+    off_diagonal = _off_diagonal_values(similarity)
+    metrics = _distribution_metrics(off_diagonal, "subject_cosine_similarity")
+    return similarity, off_diagonal, metrics
+
+
 def cohort_centered_cosine_diagnostics(
     embeddings: torch.Tensor,
     *,
     epsilon: float = 1e-12,
 ) -> tuple[torch.Tensor, torch.Tensor, dict[str, float]]:
     """Compute cosine similarity after removing the cohort-mean embedding."""
-    if embeddings.ndim != 2:
-        raise ValueError("Subject embeddings must be a two-dimensional tensor")
+    values = _subject_embeddings_as_float(embeddings)
     if epsilon <= 0:
         raise ValueError("Centered-cosine epsilon must be positive")
-    centered = embeddings.float() - embeddings.float().mean(dim=0, keepdim=True)
+    centered = values - values.mean(dim=0, keepdim=True)
     normalized = F.normalize(centered, p=2, dim=1, eps=epsilon)
     similarity = normalized @ normalized.T
     off_diagonal = _off_diagonal_values(similarity)
@@ -307,11 +297,9 @@ def subject_variance_rank_diagnostics(
     near_zero_threshold: float = 1e-8,
 ) -> tuple[torch.Tensor, torch.Tensor, dict[str, float]]:
     """Measure feature variance and effective dimensionality across subjects."""
-    if embeddings.ndim != 2:
-        raise ValueError("Subject embeddings must be a two-dimensional tensor")
+    values = _subject_embeddings_as_float(embeddings)
     if near_zero_threshold < 0:
         raise ValueError("Near-zero variance threshold must be non-negative")
-    values = embeddings.float()
     feature_variances = values.var(dim=0, unbiased=False)
     variance_metrics = {
         "subject_feature_variance_mean": feature_variances.mean().item(),
@@ -364,13 +352,11 @@ def standardized_euclidean_diagnostics(
     near_zero_threshold: float = 1e-8,
 ) -> tuple[torch.Tensor, torch.Tensor, dict[str, float]]:
     """Compute pairwise distance after cohort-wise feature standardization."""
-    if embeddings.ndim != 2:
-        raise ValueError("Subject embeddings must be a two-dimensional tensor")
+    values = _subject_embeddings_as_float(embeddings)
     if epsilon <= 0:
         raise ValueError("Standardization epsilon must be positive")
     if near_zero_threshold < 0:
         raise ValueError("Near-zero variance threshold must be non-negative")
-    values = embeddings.float()
     mean = values.mean(dim=0, keepdim=True)
     variance = values.var(dim=0, unbiased=False)
     standard_deviation = variance.sqrt().clamp_min(epsilon)
