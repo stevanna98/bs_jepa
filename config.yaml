@@ -113,3 +113,14 @@ linear_probe:
   probe_weight_decay: 0.0
   batch_size: 32
   random_seed: 42
+  embedding_preprocessing:
+    # Default preserves previous behavior. Add centered, standardized,
+    # centered_pc_removed, and standardized_pc_removed to run ablations.
+    variants:
+      - raw
+    pc_remove_components:
+      - 1
+      - 2
+      - 5
+      - 10
+    standardize_epsilon: 1.0e-6

@@ -12,6 +12,11 @@ from torch.utils.data import Dataset
 from torch_geometric.data import Data
 
 from .data import SubjectSubset
+from .embedding_preprocessing import (
+    EmbeddingPreprocessingSpec,
+    EmbeddingPreprocessor,
+    build_preprocessing_specs,
+)
 from .evaluation import (
     LabeledGraphDataset,
     extract_graph_embeddings,
@@ -181,6 +186,8 @@ def _embedding_similarity_metrics(
     embeddings: torch.Tensor,
     train_indices: torch.Tensor,
     validation_indices: torch.Tensor,
+    *,
+    prefix: str,
 ) -> dict[str, float]:
     metrics: dict[str, float] = {}
     for split, values in (
@@ -193,11 +200,118 @@ def _embedding_similarity_metrics(
             {
                 key.replace(
                     "subject_cosine_similarity",
-                    f"gender_probe_{split}_embedding_cosine",
+                    f"{prefix}_{split}_embedding_cosine",
                 ): value
                 for key, value in split_metrics.items()
             }
         )
+    return metrics
+
+
+def _preprocessing_specs(config: dict[str, Any]) -> list[EmbeddingPreprocessingSpec]:
+    specs = build_preprocessing_specs(config.get("embedding_preprocessing", {}))
+    raw = EmbeddingPreprocessingSpec("raw")
+    deduplicated: list[EmbeddingPreprocessingSpec] = []
+    for spec in [raw, *specs]:
+        if spec not in deduplicated:
+            deduplicated.append(spec)
+    return deduplicated
+
+
+def _add_legacy_raw_probe_metrics(
+    metrics: dict[str, float], *, explicit_prefix: str, legacy_prefix: str
+) -> None:
+    for suffix in ("accuracy", "balanced_accuracy", "loss"):
+        source = f"{explicit_prefix}_val_{suffix}"
+        if source in metrics:
+            metrics[f"{legacy_prefix}_val_{suffix}"] = metrics[source]
+
+
+def _add_legacy_raw_cosine_metrics(
+    metrics: dict[str, float], *, explicit_prefix: str, legacy_prefix: str
+) -> None:
+    for split in ("all", "train", "val"):
+        for statistic in ("mean", "std", "min", "max"):
+            source = f"{explicit_prefix}_{split}_embedding_cosine_{statistic}"
+            if source in metrics:
+                metrics[f"{legacy_prefix}_{split}_embedding_cosine_{statistic}"] = (
+                    metrics[source]
+                )
+
+
+def _transform_embeddings_for_probe(
+    embeddings: torch.Tensor,
+    train_indices: torch.Tensor,
+    spec: EmbeddingPreprocessingSpec,
+    *,
+    standardize_epsilon: float,
+) -> torch.Tensor:
+    preprocessor = EmbeddingPreprocessor(
+        spec.variant,
+        pc_components=spec.pc_components,
+        standardize_epsilon=standardize_epsilon,
+    )
+    preprocessor.fit(embeddings[train_indices])
+    return preprocessor.transform(embeddings)
+
+
+def _evaluate_embedding_variants(
+    embeddings: torch.Tensor,
+    labels: torch.Tensor,
+    train_indices: torch.Tensor,
+    validation_indices: torch.Tensor,
+    config: dict[str, Any],
+    *,
+    base_prefix: str,
+    legacy_prefix: str | None,
+    batch_size: int,
+    epochs: int,
+    lr: float,
+    weight_decay: float,
+    seed: int,
+) -> dict[str, float]:
+    preprocessing_config = config.get("embedding_preprocessing", {})
+    standardize_epsilon = float(preprocessing_config.get("standardize_epsilon", 1e-6))
+    if standardize_epsilon <= 0:
+        raise ValueError("linear_probe.embedding_preprocessing.standardize_epsilon must be positive")
+    metrics: dict[str, float] = {}
+    for spec in _preprocessing_specs(config):
+        prefix = f"{base_prefix}_{spec.metric_suffix}"
+        transformed = _transform_embeddings_for_probe(
+            embeddings,
+            train_indices,
+            spec,
+            standardize_epsilon=standardize_epsilon,
+        )
+        metrics.update(
+            _fit_linear_classifier(
+                transformed,
+                labels,
+                train_indices,
+                validation_indices,
+                prefix=prefix,
+                batch_size=batch_size,
+                epochs=epochs,
+                lr=lr,
+                weight_decay=weight_decay,
+                seed=seed,
+            )
+        )
+        metrics.update(
+            _embedding_similarity_metrics(
+                transformed,
+                train_indices,
+                validation_indices,
+                prefix=prefix,
+            )
+        )
+        if spec.variant == "raw" and spec.pc_components == 0 and legacy_prefix is not None:
+            _add_legacy_raw_probe_metrics(
+                metrics, explicit_prefix=prefix, legacy_prefix=legacy_prefix
+            )
+            _add_legacy_raw_cosine_metrics(
+                metrics, explicit_prefix=prefix, legacy_prefix=legacy_prefix
+            )
     return metrics
 
 
@@ -311,20 +425,19 @@ def evaluate_gender_probe(
         labels, float(config.get("probe_train_fraction", 0.7)), seed
     )
     weight_decay = float(config.get("probe_weight_decay", 0.0))
-    metrics = _fit_linear_classifier(
+    metrics = _evaluate_embedding_variants(
         embeddings,
         labels,
         train_indices,
         validation_indices,
-        prefix="gender_probe",
+        config,
+        base_prefix="gender_probe",
+        legacy_prefix="gender_probe",
         batch_size=batch_size,
         epochs=probe_epochs,
         lr=probe_lr,
         weight_decay=weight_decay,
         seed=seed,
-    )
-    metrics.update(
-        _embedding_similarity_metrics(embeddings, train_indices, validation_indices)
     )
 
     if bool(config.get("compare_baselines", True)):
@@ -352,12 +465,14 @@ def evaluate_gender_probe(
             if not torch.equal(random_labels, labels):
                 raise ValueError("Random encoder labels do not match probe labels")
             metrics.update(
-                _fit_linear_classifier(
+                _evaluate_embedding_variants(
                     random_embeddings,
                     labels,
                     train_indices,
                     validation_indices,
-                    prefix="gender_random_encoder",
+                    config,
+                    base_prefix="gender_random_encoder",
+                    legacy_prefix="gender_random_encoder",
                     batch_size=batch_size,
                     epochs=probe_epochs,
                     lr=probe_lr,

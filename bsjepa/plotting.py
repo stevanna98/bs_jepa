@@ -642,6 +642,114 @@ def _save_training_plots(
                 save_pdf=save_pdf,
             )
 
+        _save_gender_preprocessing_plots(gender_rows, path, dpi=dpi, save_pdf=save_pdf)
+
+
+def _preprocessing_label(name: str) -> str:
+    label = name.replace("_", " ")
+    label = label.replace("pc", "PC")
+    return label.title()
+
+
+def _gender_preprocessing_keys(
+    history: list[dict[str, float]], metric_suffix: str
+) -> list[tuple[str, str]]:
+    prefix = "gender_probe_"
+    suffix = f"_{metric_suffix}"
+    names = {
+        key[len(prefix) : -len(suffix)]
+        for row in history
+        for key in row
+        if key.startswith(prefix)
+        and key.endswith(suffix)
+        and key != f"gender_probe_{metric_suffix}"
+    }
+    return [
+        (f"{prefix}{name}{suffix}", _preprocessing_label(name))
+        for name in sorted(names)
+    ]
+
+
+def _plot_gender_preprocessing_metric(
+    history: list[dict[str, float]],
+    path: Path,
+    *,
+    metric_suffix: str,
+    ylabel: str,
+    title: str,
+    dpi: int,
+    save_pdf: bool,
+) -> None:
+    keys = _gender_preprocessing_keys(history, metric_suffix)
+    if not keys:
+        return
+    plt.figure(figsize=(9, 5))
+    for key, label in keys:
+        rows = [row for row in history if key in row]
+        if rows:
+            plt.plot(
+                [row["epoch"] for row in rows],
+                [row[key] for row in rows],
+                marker="o",
+                label=label,
+            )
+    plt.xlabel("Pretraining epoch")
+    plt.ylabel(ylabel)
+    plt.title(title)
+    plt.grid(alpha=0.3)
+    plt.legend(fontsize="small", ncol=2)
+    _save_figure(path, dpi=dpi, save_pdf=save_pdf)
+
+
+def _save_gender_preprocessing_plots(
+    history: list[dict[str, float]],
+    plot_dir: Path,
+    *,
+    dpi: int,
+    save_pdf: bool,
+) -> None:
+    for filename, metric_suffix, ylabel, title in (
+        (
+            "gender_probe_preprocessing_accuracy.png",
+            "val_accuracy",
+            "Accuracy",
+            "Gender Probe Accuracy by Embedding Preprocessing",
+        ),
+        (
+            "gender_probe_preprocessing_balanced_accuracy.png",
+            "val_balanced_accuracy",
+            "Balanced accuracy",
+            "Gender Probe Balanced Accuracy by Embedding Preprocessing",
+        ),
+        (
+            "gender_probe_preprocessing_loss.png",
+            "val_loss",
+            "Validation loss",
+            "Gender Probe Validation Loss by Embedding Preprocessing",
+        ),
+        (
+            "gender_probe_preprocessing_cosine_mean.png",
+            "all_embedding_cosine_mean",
+            "Mean cosine similarity",
+            "Held-Out Embedding Cosine Mean by Preprocessing",
+        ),
+        (
+            "gender_probe_preprocessing_cosine_std.png",
+            "all_embedding_cosine_std",
+            "Cosine similarity std",
+            "Held-Out Embedding Cosine Std by Preprocessing",
+        ),
+    ):
+        _plot_gender_preprocessing_metric(
+            history,
+            plot_dir / filename,
+            metric_suffix=metric_suffix,
+            ylabel=ylabel,
+            title=title,
+            dpi=dpi,
+            save_pdf=save_pdf,
+        )
+
 
 def save_training_plots(
     history: list[dict[str, float]],

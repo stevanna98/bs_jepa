@@ -20,9 +20,10 @@ def test_embedding_similarity_metrics_track_probe_splits() -> None:
         embeddings,
         torch.tensor([0, 1]),
         torch.tensor([2, 3]),
+        prefix="gender_probe_raw",
     )
 
-    assert metrics["gender_probe_all_embedding_cosine_mean"] == pytest.approx(-1 / 3)
-    assert metrics["gender_probe_train_embedding_cosine_mean"] == pytest.approx(0.0)
-    assert metrics["gender_probe_val_embedding_cosine_mean"] == pytest.approx(0.0)
-    assert "gender_probe_all_embedding_cosine_std" in metrics
+    assert metrics["gender_probe_raw_all_embedding_cosine_mean"] == pytest.approx(-1 / 3)
+    assert metrics["gender_probe_raw_train_embedding_cosine_mean"] == pytest.approx(0.0)
+    assert metrics["gender_probe_raw_val_embedding_cosine_mean"] == pytest.approx(0.0)
+    assert "gender_probe_raw_all_embedding_cosine_std" in metrics
