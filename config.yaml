@@ -28,7 +28,7 @@ data:
   num_workers: 0
 
 masking:
-  num_targets: 2
+  num_targets: 11
 
 model:
   embed_dim: 128
@@ -50,7 +50,7 @@ model:
   predictor_dropout: 0.1
   region_positional_encoding: false
   # Options: shared, random_per_target_node, rsn_specific, zero.
-  mask_token_mode: shared
+  mask_token_mode: rsn_specific
   random_mask_token_std: 0.02
 
 training:
