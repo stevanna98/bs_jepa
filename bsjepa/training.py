@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import math
 from pathlib import Path
 from typing import Any
@@ -64,6 +65,65 @@ def _cosine_value(start: float, end: float, progress: float) -> float:
     return end + 0.5 * (start - end) * (1 + math.cos(math.pi * progress))
 
 
+def _subnetwork_loss_rows(
+    *,
+    epoch: int,
+    rsn_loss_sums: dict[int, float],
+    rsn_row_counts: dict[int, int],
+    num_rsns: int,
+    rsn_names: list[str] | None,
+) -> list[dict[str, float | int | str]]:
+    rows: list[dict[str, float | int | str]] = []
+    losses: dict[int, float] = {
+        rsn_id: loss_sum / rsn_row_counts[rsn_id]
+        for rsn_id, loss_sum in rsn_loss_sums.items()
+        if rsn_row_counts.get(rsn_id, 0) > 0
+    }
+    ranked = sorted(losses, key=lambda rsn_id: losses[rsn_id])
+    ranks = {rsn_id: rank for rank, rsn_id in enumerate(ranked, start=1)}
+    easiest = ranked[0] if ranked else None
+    hardest = ranked[-1] if ranked else None
+    for rsn_id in range(num_rsns):
+        role = ""
+        if rsn_id == easiest:
+            role = "easiest"
+        elif rsn_id == hardest:
+            role = "hardest"
+        rows.append(
+            {
+                "epoch": epoch,
+                "rsn_id": rsn_id,
+                "rsn_name": (
+                    rsn_names[rsn_id]
+                    if rsn_names is not None and rsn_id < len(rsn_names)
+                    else f"rsn_{rsn_id}"
+                ),
+                "prediction_loss": losses.get(rsn_id, float("nan")),
+                "target_node_count": rsn_row_counts.get(rsn_id, 0),
+                "rank_by_loss": ranks.get(rsn_id, ""),
+                "difficulty": role,
+            }
+        )
+    return rows
+
+
+def _write_rows_csv(path: Path, rows: list[dict[str, Any]]) -> None:
+    fieldnames = [
+        "epoch",
+        "rsn_id",
+        "rsn_name",
+        "prediction_loss",
+        "target_node_count",
+        "rank_by_loss",
+        "difficulty",
+    ]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
 def pretrain(
     model: BSJEPA,
     loader: DataLoader[list],
@@ -77,6 +137,7 @@ def pretrain(
     linear_probe_dataset: LabeledGraphDataset | None = None,
     linear_probe_config: dict[str, Any] | None = None,
     random_probe_model: BSJEPA | None = None,
+    rsn_names: list[str] | None = None,
 ) -> list[dict[str, float]]:
     """Run BS-JEPA pretraining and write checkpoints and diagnostic plots."""
     epochs = int(config["epochs"])
@@ -162,6 +223,8 @@ def pretrain(
     if linear_probe_dataset is not None and linear_probe_frequency <= 0:
         raise ValueError("linear_probe.eval_frequency_epochs must be positive")
     history: list[dict[str, float]] = []
+    subnetwork_loss_history: list[dict[str, Any]] = []
+    tables_path = output_path / "tables"
     global_step = 0
 
     model.to(device)
@@ -256,6 +319,22 @@ def pretrain(
             "learning_rate": learning_rate,
             "ema_momentum": momentum,
         }
+        epoch_subnetwork_rows = _subnetwork_loss_rows(
+            epoch=epoch,
+            rsn_loss_sums=rsn_loss_sums,
+            rsn_row_counts=rsn_row_counts,
+            num_rsns=mask_collator.num_rsns,
+            rsn_names=rsn_names,
+        )
+        subnetwork_loss_history.extend(epoch_subnetwork_rows)
+        _write_rows_csv(
+            tables_path / f"subnetwork_prediction_losses_epoch_{epoch:04d}.csv",
+            epoch_subnetwork_rows,
+        )
+        _write_rows_csv(
+            tables_path / "subnetwork_prediction_losses.csv",
+            subnetwork_loss_history,
+        )
         plot_interval = save_plots and plot_frequency > 0 and (
             epoch % plot_frequency == 0 or epoch == epochs
         )

@@ -160,6 +160,7 @@ def main() -> None:
             linear_probe_config if linear_probe_dataset is not None else None
         ),
         random_probe_model=random_probe_model,
+        rsn_names=atlas.rsn_names,
     )
     if bool(config["training"].get("save_final_artifact", True)):
         from bsjepa.artifacts import export_final_artifact
