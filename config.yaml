@@ -23,7 +23,7 @@ data:
   # For positive_proportional, threshold is the retained fraction of positive edges.
   graph_strategy: positive_proportional
   top_k: 8
-  threshold: 0.2
+  threshold: 0.1
   batch_size: 16
   num_workers: 0
 
@@ -37,13 +37,13 @@ model:
   # Preserve this many coarse windows instead of globally pooling the time axis.
   temporal_pool_bins: 8
   # Options: gcn, gat, graphsage, transformer, gine.
-  encoder_type: graphsage
+  encoder_type: gat
   encoder_hidden: 128
   encoder_layers: 2
   encoder_heads: 4
   encoder_dropout: 0.1
   # Options: gcn, gat, graphsage, transformer, gine.
-  predictor_type: graphsage
+  predictor_type: gat
   predictor_hidden: 64
   predictor_layers: 2
   predictor_heads: 2
@@ -58,7 +58,7 @@ training:
   warmup_epochs: 0
   weight_decay_start: 0.01
   weight_decay_end: 0.05
-  ema_start: 0.999
+  ema_start: 0.996
   ema_end: 1.0
   clip_grad: 1.0
   prediction_variance_weight: 0.5
